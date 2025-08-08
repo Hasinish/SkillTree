@@ -1,0 +1,64 @@
+[
+  {
+    "name": "Data Structure Fundamentals",
+    "category": "Programming",
+    "tasks": [
+      { "title": "Arrays & Linked Lists",         "content": "Implement basic insert, delete, and traversal operations for dynamic arrays and singly linked lists." },
+      { "title": "Stacks & Queues",               "content": "Build stack and queue classes; solve balanced-parentheses and printer-queue exercises." },
+      { "title": "Hash Tables",                   "content": "Create a hash map with linear probing; track load factor and implement automatic resizing." },
+      { "title": "Binary Trees & Traversals",     "content": "Construct a binary tree and code in-order, pre-order, and post-order traversals." },
+      { "title": "Binary Search Tree (BST)",      "content": "Add insert, search, delete, and validate operations; measure average depth for 1 k random inserts." },
+      { "title": "Self-Balancing Trees (AVL)",    "content": "Extend your BST to auto-balance using AVL rotations; verify height ≤ log n." },
+      { "title": "Heaps & Priority Queues",       "content": "Implement a min-heap; use it for heapsort and K-largest-elements problems." },
+      { "title": "Graph Representations",         "content": "Store graphs as adjacency lists and matrices; compare memory and traversal speed on sparse vs dense graphs." }
+    ]
+  },
+  {
+    "name": "Algorithm Fundamentals",
+    "category": "Programming",
+    "tasks": [
+      { "title": "Big-O Basics",                  "content": "Practice calculating time & space complexity for common code snippets." },
+      { "title": "Sorting Algorithms",            "content": "Implement Bubble, Insertion, Merge, Quick, and Heap sort; benchmark runtimes." },
+      { "title": "Searching Techniques",          "content": "Code linear and binary search; discuss use-cases and edge conditions." },
+      { "title": "Divide-and-Conquer",            "content": "Solve maximum subarray and closest-pair problems using divide-and-conquer strategies." },
+      { "title": "Greedy Algorithms",             "content": "Implement activity-selection and coin-change (greedy) solutions; prove correctness." },
+      { "title": "Dynamic Programming (DP)",      "content": "Solve Fibonacci, 0/1 Knapsack, and Longest Increasing Subsequence using DP." },
+      { "title": "Graph Algorithms",              "content": "Implement DFS, BFS, Dijkstra, and Kruskal; visualize shortest paths and MST." },
+      { "title": "Backtracking & Recursion",      "content": "Solve N-Queens and Sudoku using backtracking; analyze recursion tree depth." }
+    ]
+  },
+  {
+    "name": "Python Fundamentals",
+    "category": "Programming",
+    "tasks": [
+      { "title": "Set Up & Syntax",               "content": "Install Python, run scripts, and explore REPL basics (variables, operators, I/O)." },
+      { "title": "Control Flow",                  "content": "Practice if/else, loops, list comprehensions, and exception handling." },
+      { "title": "Functions & Modules",           "content": "Write reusable functions, import standard-library modules, and create your own module." },
+      { "title": "Data Structures",               "content": "Use lists, tuples, sets, and dictionaries; understand mutability and common methods." },
+      { "title": "File I/O",                      "content": "Read and write text & JSON files; handle context managers with `with` statements." },
+      { "title": "Virtual Environments & pip",    "content": "Create a virtualenv, install packages, and freeze dependencies to `requirements.txt`." }
+    ]
+  },
+  {
+    "name": "HTML Fundamentals",
+    "category": "Web Development",
+    "tasks": [
+      { "title": "Document Structure",            "content": "Build a basic HTML5 document with `<!DOCTYPE>`, `<head>`, and semantic `<header>/<nav>/<main>/<footer>` sections." },
+      { "title": "Text & Media Elements",         "content": "Use headings, paragraphs, images, audio, video, and figure/figcaption tags appropriately." },
+      { "title": "Lists, Tables, & Forms",        "content": "Create ordered/unordered lists, tables with `<thead>/<tbody>`, and a contact form with inputs and labels." },
+      { "title": "Links & Navigation",            "content": "Implement anchor links, external links, and a navigation bar using `<nav>` and `<a>`." },
+      { "title": "Accessibility Basics",          "content": "Add alt text, aria-labels, and proper heading hierarchy for screen-reader friendliness." }
+    ]
+  },
+  {
+    "name": "CSS Fundamentals",
+    "category": "Web Development",
+    "tasks": [
+      { "title": "Selectors & Specificity",       "content": "Practice element, class, id, and attribute selectors; understand specificity rules." },
+      { "title": "Box Model & Positioning",       "content": "Experiment with margin, border, padding; test relative, absolute, fixed, and sticky positioning." },
+      { "title": "Flexbox Layout",                "content": "Create a responsive navbar and card grid using Flexbox properties (`justify-content`, `align-items`)." },
+      { "title": "CSS Grid Layout",               "content": "Build a magazine-style layout with named grid areas and responsive columns." },
+      { "title": "Responsive Design & Media Queries", "content": "Add breakpoints for mobile, tablet, and desktop; convert px to rem/em for scalable typography." }
+    ]
+  }
+]

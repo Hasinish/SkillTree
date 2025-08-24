@@ -14,10 +14,8 @@ export default function RegisterPage() {
     try {
       const { data } = await api.post("/auth/register", { username, password });
       saveToken(data.token);
-      saveIsAdmin(data.isAdmin);   
-
+      saveIsAdmin(data.isAdmin);
       toast.success("Account created!");
-
       if (data.isAdmin) {
         nav("/");
       } else {

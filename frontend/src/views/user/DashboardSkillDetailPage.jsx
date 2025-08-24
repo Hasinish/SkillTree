@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import api from "../../lib/axios";
 import toast from "react-hot-toast";
+import SkillProgressBar from "../../components/user/SkillProgressBar";
 
 export default function DashboardSkillDetailPage() {
   const { id: skillId } = useParams();
@@ -28,12 +29,25 @@ export default function DashboardSkillDetailPage() {
     return <p className="text-center py-20">Skill not found.</p>;
   }
 
+  // pick the correct tree image for a given percent
+  const stageSrc = (p) => {
+    if (p === 0)   return "/trees/seed.png";
+    if (p < 25)    return "/trees/sprout.png";
+    if (p < 50)    return "/trees/small-plant.png";
+    if (p < 75)    return "/trees/young-tree.png";
+    if (p < 100)   return "/trees/leafy-tree.png";
+    return "/trees/full-tree.png";
+  };
+
+  // progress
+  const total = entry.tasks.length;
+  const done  = entry.completedTasks.filter(Boolean).length;
+  const pct   = total ? Math.round((done / total) * 100) : 0;
+
   // toggle a task's completion state
   const handleToggle = async (index) => {
     try {
-      const { data } = await api.patch(
-        `/learning/${skillId}/task/${index}`
-      );
+      const { data } = await api.patch(`/learning/${skillId}/task/${index}`);
       // merge in the updated completedTasks array
       setEntry((prev) => ({ ...prev, completedTasks: data.completedTasks }));
     } catch {
@@ -51,7 +65,21 @@ export default function DashboardSkillDetailPage() {
         <div className="card bg-base-100 shadow">
           <div className="card-body">
             <h1 className="text-2xl font-bold mb-1">{entry.name}</h1>
-            <p className="text-sm opacity-70 mb-4">{entry.category}</p>
+            <p className="text-sm opacity-70 mb-2">{entry.category}</p>
+
+            {/* Tree stage image */}
+            <div className="flex flex-col items-center mb-4 w-full">
+              <img
+                src={stageSrc(pct)}
+                alt="Skill growth stage"
+                className="w-40 h-40 object-contain"
+              />
+              {/* NEW: progress bar under the tree */}
+              <div className="w-full mt-2">
+                <SkillProgressBar percent={pct} />
+              </div>
+              <div className="text-sm opacity-70 mt-2">{pct}% complete</div>
+            </div>
 
             <h2 className="text-lg font-semibold mb-2">Tasks</h2>
             {entry.tasks.length === 0 ? (
@@ -71,9 +99,7 @@ export default function DashboardSkillDetailPage() {
                     </div>
                     <button
                       className={`btn btn-sm ${
-                        entry.completedTasks[i]
-                          ? "btn-success"
-                          : "btn-outline"
+                        entry.completedTasks[i] ? "btn-success" : "btn-outline"
                       }`}
                       onClick={() => handleToggle(i)}
                     >

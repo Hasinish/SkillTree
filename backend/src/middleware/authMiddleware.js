@@ -1,7 +1,6 @@
 import jwt from "jsonwebtoken";
 const JWT_SECRET = process.env.JWT_SECRET || "replace_this_with_env_secret";
 
-// Protect any route – user must be logged in
 export const protect = (req, res, next) => {
   let token;
   if (
@@ -22,7 +21,6 @@ export const protect = (req, res, next) => {
   }
 };
 
-// Admin-only middleware – must be logged in AND isAdmin=true
 export const admin = (req, res, next) => {
   if (!req.user || !req.user.isAdmin) {
     return res.status(403).json({ message: "Admin privileges required" });

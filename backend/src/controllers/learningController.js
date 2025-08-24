@@ -1,7 +1,7 @@
 import User from "../models/User.js";
 import Skill from "../models/Skill.js";
 
-// Start learning: initialize completedTasks to all false
+
 export async function startLearning(req, res) {
   try {
     const user = await User.findById(req.user.id);
@@ -24,7 +24,7 @@ export async function startLearning(req, res) {
   }
 }
 
-// List all your learning entries
+
 export async function getLearningSkills(req, res) {
   try {
     const user = await User.findById(req.user.id).populate("learningSkills.skill");
@@ -41,7 +41,7 @@ export async function getLearningSkills(req, res) {
   }
 }
 
-// Get one skill + your progress
+
 export async function getLearningSkill(req, res) {
   try {
     const user = await User.findById(req.user.id).populate("learningSkills.skill");
@@ -62,7 +62,7 @@ export async function getLearningSkill(req, res) {
   }
 }
 
-// Toggle one task’s completion
+
 export async function toggleTask(req, res) {
   try {
     const idx = parseInt(req.params.taskIndex, 10);

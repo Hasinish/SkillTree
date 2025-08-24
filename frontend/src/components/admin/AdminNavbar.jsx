@@ -3,7 +3,6 @@ import { SunIcon, MoonIcon } from "lucide-react";
 import { useState, useEffect } from "react";
 
 export default function AdminNavbar() {
-  // true = dark (“forest”), false = light (“lemonade”)
   const [forestMode, setForestMode] = useState(
     localStorage.getItem("theme") === "forest"
   );

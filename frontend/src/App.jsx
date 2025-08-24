@@ -8,6 +8,8 @@ import DashboardPage from './views/user/DashboardPage';
 import UserSkillsListPage from './views/user/UserSkillsListPage';
 import UserSkillDetailPage from './views/user/UserSkillDetailPage';
 import DashboardSkillDetailPage from './views/user/DashboardSkillDetailPage';
+import SkillForestPage from './views/user/SkillForestPage';
+import CreateCustomSkillPage from './views/user/CreateCustomSkillPage'; // NEW
 
 import AdminSkillsListPage from './views/admin/AdminSkillsListPage';
 import AdminCreateSkillPage from './views/admin/AdminCreateSkillPage';
@@ -19,8 +21,7 @@ export default function App() {
   const isAdmin    = getIsAdmin();
   const isLoggedIn = !!token;
 
-  // routes that use the "user" layout
-  const isUserRoute = ['/login','/register','/dashboard','/skills']
+  const isUserRoute = ['/login','/register','/dashboard','/skills','/forest','/custom-skill']
     .some(p => pathname.startsWith(p));
 
   return (
@@ -30,68 +31,26 @@ export default function App() {
       <div className="flex-1 overflow-auto">
         {isUserRoute ? (
           <Routes>
-            <Route
-              path="/login"
-              element={isLoggedIn
-                ? <Navigate to={isAdmin ? '/' : '/dashboard'} replace />
-                : <LoginPage />}
-            />
-            <Route
-              path="/register"
-              element={isLoggedIn
-                ? <Navigate to={isAdmin ? '/' : '/dashboard'} replace />
-                : <RegisterPage />}
-            />
+            <Route path="/login" element={isLoggedIn ? <Navigate to={isAdmin ? '/' : '/dashboard'} replace /> : <LoginPage />} />
+            <Route path="/register" element={isLoggedIn ? <Navigate to={isAdmin ? '/' : '/dashboard'} replace /> : <RegisterPage />} />
 
-            {/* Dashboard and its detail page */}
-            <Route
-              path="/dashboard"
-              element={isLoggedIn
-                ? <DashboardPage />
-                : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/dashboard/:id"
-              element={isLoggedIn
-                ? <DashboardSkillDetailPage />
-                : <Navigate to="/login" replace />}
-            />
+            <Route path="/dashboard" element={isLoggedIn ? <DashboardPage /> : <Navigate to="/login" replace />} />
+            <Route path="/dashboard/:id" element={isLoggedIn ? <DashboardSkillDetailPage /> : <Navigate to="/login" replace />} />
 
-            {/* All-skills list + its readonly detail page */}
-            <Route
-              path="/skills"
-              element={isLoggedIn
-                ? <UserSkillsListPage />
-                : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/skills/:id"
-              element={isLoggedIn
-                ? <UserSkillDetailPage />
-                : <Navigate to="/login" replace />}
-            />
+            <Route path="/skills" element={isLoggedIn ? <UserSkillsListPage /> : <Navigate to="/login" replace />} />
+            <Route path="/skills/:id" element={isLoggedIn ? <UserSkillDetailPage /> : <Navigate to="/login" replace />} />
+
+            <Route path="/forest" element={isLoggedIn ? <SkillForestPage /> : <Navigate to="/login" replace />} />
+
+            {/* NEW: Create Custom Skill */}
+            <Route path="/custom-skill" element={isLoggedIn ? <CreateCustomSkillPage /> : <Navigate to="/login" replace />} />
           </Routes>
         ) : (
           <main className="max-w-5xl mx-auto px-4 py-10">
             <Routes>
-              <Route
-                path="/"
-                element={isLoggedIn && isAdmin
-                  ? <AdminSkillsListPage />
-                  : <Navigate to="/dashboard" replace />}
-              />
-              <Route
-                path="/create-skill"
-                element={isLoggedIn && isAdmin
-                  ? <AdminCreateSkillPage />
-                  : <Navigate to="/dashboard" replace />}
-              />
-              <Route
-                path="/skill/:id"
-                element={isLoggedIn && isAdmin
-                  ? <AdminSkillDetailPage />
-                  : <Navigate to="/dashboard" replace />}
-              />
+              <Route path="/" element={isLoggedIn && isAdmin ? <AdminSkillsListPage /> : <Navigate to="/dashboard" replace />} />
+              <Route path="/create-skill" element={isLoggedIn && isAdmin ? <AdminCreateSkillPage /> : <Navigate to="/dashboard" replace />} />
+              <Route path="/skill/:id" element={isLoggedIn && isAdmin ? <AdminSkillDetailPage /> : <Navigate to="/dashboard" replace />} />
             </Routes>
           </main>
         )}

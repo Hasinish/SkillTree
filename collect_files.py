@@ -5,27 +5,30 @@ from pathlib import Path
 
 def collect_files(root: Path, out_file: Path):
     # names to always skip
-    SKIP_DIRS = {"node_modules"}            # folder names (case-insensitive)
-    SKIP_FILES = {"package-lock.json", "collect_files.py", "data.json"}      # file names (case-insensitive)
-
+    SKIP_DIRS  = {"node_modules", ".git"}  # folder names (case-insensitive)
+    SKIP_FILES = {"package-lock.json", "collect_files.py", "data.json", ".git"}  # file names (case-insensitive)
+    SKIP_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+    
     with out_file.open("w", encoding="utf-8", errors="replace") as out:
         for path in root.rglob("*"):
-            # skip directories named node_modules
+            # skip directories named node_modules / .git
             if path.is_dir() and path.name.lower() in SKIP_DIRS:
-                # tell rglob to skip walking this directory by continuing;
-                # rglob can't prune, so we rely on the name check below for files
                 continue
 
             # only process files
             if not path.is_file():
                 continue
 
-            # skip any file inside a node_modules folder (defensive)
+            # skip any file inside a skipped directory (defensive)
             if any(part.lower() in SKIP_DIRS for part in path.parts):
                 continue
 
-            # skip package-lock.json anywhere
+            # skip specific file names
             if path.name.lower() in SKIP_FILES:
+                continue
+
+            # skip by extension (e.g., .png)
+            if path.suffix.lower() in SKIP_EXTS:
                 continue
 
             # write a simple header + file contents

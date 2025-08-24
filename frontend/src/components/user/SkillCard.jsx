@@ -1,46 +1,45 @@
-import { useNavigate } from 'react-router-dom';
-import SkillProgressBar from './SkillProgressBar';
+import { useNavigate } from "react-router-dom";
+import {
+  TagIcon,
+  ClipboardListIcon,
+  ArrowRightCircleIcon,
+} from "lucide-react";
+import SkillProgressBar from "./SkillProgressBar";
 
-export default function SkillCard({
-  skill,
-  to,
-  onStart,
-  isLearning = false,
-  progress
-}) {
+export default function SkillCard({ skill, to, progress }) {
   const navigate = useNavigate();
-
   return (
     <div
       onClick={() => navigate(to)}
       className="
-        bg-base-100 p-5 rounded-lg shadow hover:shadow-lg 
-        transition cursor-pointer border border-black
+        bg-base-100 p-5 shadow hover:shadow-lg
+        transition cursor-pointer border border-primary
       "
     >
-      <h2 className="text-xl font-semibold mb-1">{skill.name}</h2>
-      <p className="text-sm opacity-75">{skill.category}</p>
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-xl font-semibold flex-1">{skill.name}</h2>
+        <ArrowRightCircleIcon className="h-6 w-6 text-secondary" />
+      </div>
 
-      {/* Progress bar + percent only if `progress` was passed */}
+      <div className="flex items-center text-sm opacity-75 mb-4 space-x-4">
+        <span className="flex items-center space-x-1">
+          <TagIcon className="h-4 w-4" />
+          <span>{skill.category}</span>
+        </span>
+        <span className="flex items-center space-x-1">
+          <ClipboardListIcon className="h-4 w-4" />
+          <span>{skill.tasks.length} task{skill.tasks.length !== 1 && "s"}</span>
+        </span>
+      </div>
+
       {progress !== undefined && (
         <>
           <SkillProgressBar percent={progress} />
-          <p className="text-xs opacity-70 mt-1">{progress}% completed</p>
+          <p className="text-xs opacity-70 mt-1 flex items-center space-x-1">
+            <span>{progress}%</span>
+            <span>completed</span>
+          </p>
         </>
-      )}
-
-      {/* “Start Learning” button only if `onStart` was passed */}
-      {onStart && (
-        <button
-          className="btn btn-primary btn-sm mt-4 w-full"
-          disabled={isLearning}
-          onClick={(e) => {
-            e.stopPropagation();
-            onStart(skill._id);
-          }}
-        >
-          {isLearning ? 'Learning ✓' : 'Start Learning'}
-        </button>
       )}
     </div>
   );

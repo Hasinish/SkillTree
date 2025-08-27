@@ -1,4 +1,5 @@
 import Skill from "../models/Skill.js";
+import User from "../models/User.js";
 
 export async function getAllSkills(req, res) {
   try {
@@ -46,6 +47,13 @@ export async function updateSkill(req, res) {
 
 export async function deleteSkill(req, res) {
   try {
+    const inUse = await User.exists({ "learningSkills.skill": req.params.id });
+    if (inUse) {
+      return res
+        .status(409)
+        .json({ message: "Cannot delete: users are learning this skill" });
+    }
+
     const deleted = await Skill.findByIdAndDelete(req.params.id);
     if (!deleted) return res.status(404).json({ message: "Skill not found" });
     res.json({ message: "Skill deleted" });
@@ -54,7 +62,7 @@ export async function deleteSkill(req, res) {
   }
 }
 
-/** Allow regular users to create a custom skill; the name is forced to include " (Custom)". */
+
 export async function createCustomSkill(req, res) {
   try {
     const { name, category, tasks } = req.body;

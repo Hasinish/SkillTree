@@ -568,7 +568,6 @@ export async function toggleTask(req, res) {
 ===== FILE: backend\src\controllers\skillsController.js =====
 import Skill from "../models/Skill.js";
 
-
 export async function getAllSkills(req, res) {
   try {
     const skills = await Skill.find().sort({ createdAt: -1 });
@@ -577,7 +576,6 @@ export async function getAllSkills(req, res) {
     res.status(500).json({ message: "Internal server error" });
   }
 }
-
 
 export async function getSkillById(req, res) {
   try {
@@ -589,7 +587,6 @@ export async function getSkillById(req, res) {
   }
 }
 
-
 export async function createSkill(req, res) {
   try {
     const { name, category, tasks } = req.body;
@@ -599,7 +596,6 @@ export async function createSkill(req, res) {
     res.status(500).json({ message: "Internal server error" });
   }
 }
-
 
 export async function updateSkill(req, res) {
   try {
@@ -616,12 +612,26 @@ export async function updateSkill(req, res) {
   }
 }
 
-
 export async function deleteSkill(req, res) {
   try {
     const deleted = await Skill.findByIdAndDelete(req.params.id);
     if (!deleted) return res.status(404).json({ message: "Skill not found" });
     res.json({ message: "Skill deleted" });
+  } catch {
+    res.status(500).json({ message: "Internal server error" });
+  }
+}
+
+/** Allow regular users to create a custom skill; the name is forced to include " (Custom)". */
+export async function createCustomSkill(req, res) {
+  try {
+    const { name, category, tasks } = req.body;
+    if (!name || !category || !Array.isArray(tasks)) {
+      return res.status(400).json({ message: "Invalid payload" });
+    }
+    const customName = name.includes("(Custom)") ? name : `${name} (Custom)`;
+    const created = await new Skill({ name: customName, category, tasks }).save();
+    res.status(201).json(created);
   } catch {
     res.status(500).json({ message: "Internal server error" });
   }
@@ -768,13 +778,17 @@ import {
   createSkill,
   updateSkill,
   deleteSkill,
+  createCustomSkill, // NEW
 } from "../controllers/skillsController.js";
 import { protect, admin } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-
 router.get("/", getAllSkills);
+
+// NEW: allow any authenticated user to create a custom skill
+router.post("/custom", protect, createCustomSkill);
+
 router.get("/:id", getSkillById);
 
 router.post("/", protect, admin, createSkill);
@@ -783,6 +797,8 @@ router.delete("/:id", protect, admin, deleteSkill);
 
 export default router;
 
+
+===== IMAGE FILE: frontend\public\vite.svg =====
 
 ===== FILE: frontend\src\App.jsx =====
 import { Routes, Route, useLocation, Navigate } from 'react-router-dom';
@@ -795,8 +811,8 @@ import DashboardPage from './views/user/DashboardPage';
 import UserSkillsListPage from './views/user/UserSkillsListPage';
 import UserSkillDetailPage from './views/user/UserSkillDetailPage';
 import DashboardSkillDetailPage from './views/user/DashboardSkillDetailPage';
-import SkillForestPage from './views/user/SkillForestPage'; // NEW
-
+import SkillForestPage from './views/user/SkillForestPage';
+import CreateCustomSkillPage from './views/user/CreateCustomSkillPage'; 
 import AdminSkillsListPage from './views/admin/AdminSkillsListPage';
 import AdminCreateSkillPage from './views/admin/AdminCreateSkillPage';
 import AdminSkillDetailPage from './views/admin/AdminSkillDetailPage';
@@ -807,8 +823,7 @@ export default function App() {
   const isAdmin    = getIsAdmin();
   const isLoggedIn = !!token;
 
-  // routes that use the "user" layout
-  const isUserRoute = ['/login','/register','/dashboard','/skills','/forest'] // + /forest
+  const isUserRoute = ['/login','/register','/dashboard','/skills','/forest','/custom-skill']
     .some(p => pathname.startsWith(p));
 
   return (
@@ -818,76 +833,25 @@ export default function App() {
       <div className="flex-1 overflow-auto">
         {isUserRoute ? (
           <Routes>
-            <Route
-              path="/login"
-              element={isLoggedIn
-                ? <Navigate to={isAdmin ? '/' : '/dashboard'} replace />
-                : <LoginPage />}
-            />
-            <Route
-              path="/register"
-              element={isLoggedIn
-                ? <Navigate to={isAdmin ? '/' : '/dashboard'} replace />
-                : <RegisterPage />}
-            />
+            <Route path="/login" element={isLoggedIn ? <Navigate to={isAdmin ? '/' : '/dashboard'} replace /> : <LoginPage />} />
+            <Route path="/register" element={isLoggedIn ? <Navigate to={isAdmin ? '/' : '/dashboard'} replace /> : <RegisterPage />} />
 
-            {/* Dashboard and its detail page */}
-            <Route
-              path="/dashboard"
-              element={isLoggedIn
-                ? <DashboardPage />
-                : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/dashboard/:id"
-              element={isLoggedIn
-                ? <DashboardSkillDetailPage />
-                : <Navigate to="/login" replace />}
-            />
+            <Route path="/dashboard" element={isLoggedIn ? <DashboardPage /> : <Navigate to="/login" replace />} />
+            <Route path="/dashboard/:id" element={isLoggedIn ? <DashboardSkillDetailPage /> : <Navigate to="/login" replace />} />
 
-            {/* All-skills list + its readonly detail page */}
-            <Route
-              path="/skills"
-              element={isLoggedIn
-                ? <UserSkillsListPage />
-                : <Navigate to="/login" replace />}
-            />
-            <Route
-              path="/skills/:id"
-              element={isLoggedIn
-                ? <UserSkillDetailPage />
-                : <Navigate to="/login" replace />}
-            />
+            <Route path="/skills" element={isLoggedIn ? <UserSkillsListPage /> : <Navigate to="/login" replace />} />
+            <Route path="/skills/:id" element={isLoggedIn ? <UserSkillDetailPage /> : <Navigate to="/login" replace />} />
 
-            {/* NEW: Skill Forest */}
-            <Route
-              path="/forest"
-              element={isLoggedIn
-                ? <SkillForestPage />
-                : <Navigate to="/login" replace />}
-            />
+            <Route path="/forest" element={isLoggedIn ? <SkillForestPage /> : <Navigate to="/login" replace />} />
+
+            <Route path="/custom-skill" element={isLoggedIn ? <CreateCustomSkillPage /> : <Navigate to="/login" replace />} />
           </Routes>
         ) : (
           <main className="max-w-5xl mx-auto px-4 py-10">
             <Routes>
-              <Route
-                path="/"
-                element={isLoggedIn && isAdmin
-                  ? <AdminSkillsListPage />
-                  : <Navigate to="/dashboard" replace />}
-              />
-              <Route
-                path="/create-skill"
-                element={isLoggedIn && isAdmin
-                  ? <AdminCreateSkillPage />
-                  : <Navigate to="/dashboard" replace />}
-              />
-              <Route
-                path="/skill/:id"
-                element={isLoggedIn && isAdmin
-                  ? <AdminSkillDetailPage />
-                  : <Navigate to="/dashboard" replace />}
-              />
+              <Route path="/" element={isLoggedIn && isAdmin ? <AdminSkillsListPage /> : <Navigate to="/dashboard" replace />} />
+              <Route path="/create-skill" element={isLoggedIn && isAdmin ? <AdminCreateSkillPage /> : <Navigate to="/dashboard" replace />} />
+              <Route path="/skill/:id" element={isLoggedIn && isAdmin ? <AdminSkillDetailPage /> : <Navigate to="/dashboard" replace />} />
             </Routes>
           </main>
         )}
@@ -965,6 +929,20 @@ ReactDOM.createRoot(document.getElementById('root')).render(
   </React.StrictMode>
 );
 
+
+===== IMAGE FILE: frontend\public\forest\forest-bg.png =====
+
+===== IMAGE FILE: frontend\public\trees\full-tree.png =====
+
+===== IMAGE FILE: frontend\public\trees\leafy-tree.png =====
+
+===== IMAGE FILE: frontend\public\trees\seed.png =====
+
+===== IMAGE FILE: frontend\public\trees\small-plant.png =====
+
+===== IMAGE FILE: frontend\public\trees\sprout.png =====
+
+===== IMAGE FILE: frontend\public\trees\young-tree.png =====
 
 ===== FILE: frontend\src\lib\auth.js =====
 
@@ -1316,7 +1294,8 @@ import {
   HomeIcon,
   BookOpenIcon,
   GridIcon,
-  TreesIcon, // NEW
+  TreesIcon,
+  PlusCircleIcon, // NEW
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { clearAuth, getToken, getIsAdmin } from "../../lib/auth";
@@ -1327,7 +1306,6 @@ export default function UserNavbar() {
   const loggedIn = !!getToken();
   const isAdmin = getIsAdmin();
 
-  // theme toggle state
   const [forestMode, setForestMode] = useState(
     localStorage.getItem("theme") === "forest"
   );
@@ -1354,27 +1332,19 @@ export default function UserNavbar() {
         </Link>
 
         <div className="flex items-center space-x-4">
-          {/* Theme toggle */}
           <button
             aria-label="Toggle theme"
             className="btn btn-ghost btn-circle btn-sm"
             onClick={() => setForestMode(!forestMode)}
           >
-            {forestMode ? (
-              <SunIcon className="h-5 w-5" />
-            ) : (
-              <MoonIcon className="h-5 w-5" />
-            )}
+            {forestMode ? <SunIcon className="h-5 w-5" /> : <MoonIcon className="h-5 w-5" />}
           </button>
 
-          {/* Nav links */}
           {loggedIn ? (
             <>
               <Link
                 to="/dashboard"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
-                  pathname === "/dashboard" ? "btn-active" : ""
-                }`}
+                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${pathname === "/dashboard" ? "btn-active" : ""}`}
               >
                 <HomeIcon className="h-4 w-4" />
                 <span>Dashboard</span>
@@ -1382,41 +1352,38 @@ export default function UserNavbar() {
 
               <Link
                 to="/skills"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
-                  pathname.startsWith("/skills") ? "btn-active" : ""
-                }`}
+                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${pathname.startsWith("/skills") ? "btn-active" : ""}`}
               >
                 <BookOpenIcon className="h-4 w-4" />
                 <span>Skills</span>
               </Link>
 
-              {/* NEW: Forest View link */}
+              {/* NEW: Create Custom Skill */}
+              <Link
+                to="/custom-skill"
+                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${pathname.startsWith("/custom-skill") ? "btn-active" : ""}`}
+              >
+                <PlusCircleIcon className="h-4 w-4" />
+                <span>Create Custom Skill</span>
+              </Link>
+
               <Link
                 to="/forest"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
-                  pathname.startsWith("/forest") ? "btn-active" : ""
-                }`}
+                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${pathname.startsWith("/forest") ? "btn-active" : ""}`}
               >
                 <TreesIcon className="h-4 w-4" />
                 <span>Forest View</span>
               </Link>
 
-              <button
-                onClick={logout}
-                className="btn btn-primary btn-sm flex items-center space-x-1"
-              >
+              <button onClick={logout} className="btn btn-primary btn-sm flex items-center space-x-1">
                 <MoonIcon className="h-4 w-4 rotate-90" />
                 <span>Log Out</span>
               </button>
             </>
           ) : (
             <>
-              <Link to="/login" className="btn btn-primary btn-sm">
-                Log In
-              </Link>
-              <Link to="/register" className="btn btn-primary btn-sm">
-                Sign Up
-              </Link>
+              <Link to="/login" className="btn btn-primary btn-sm">Log In</Link>
+              <Link to="/register" className="btn btn-primary btn-sm">Sign Up</Link>
             </>
           )}
         </div>
@@ -1778,6 +1745,128 @@ export default function AdminSkillsListPage() {
 }
 
 
+===== FILE: frontend\src\views\user\CreateCustomSkillPage.jsx =====
+import { useState } from "react";
+import { useNavigate, Link } from "react-router-dom";
+import toast from "react-hot-toast";
+import { PlusIcon } from "lucide-react";
+import api from "../../lib/axios";
+import { CATEGORIES } from "../../lib/categories";
+
+export default function CreateCustomSkillPage() {
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState(CATEGORIES[0]);
+  const [tasks, setTasks] = useState([{ title: "", content: "" }]);
+  const [saving, setSaving] = useState(false);
+  const navigate = useNavigate();
+
+  const addTask = () => setTasks((prev) => [...prev, { title: "", content: "" }]);
+  const removeTask = (idx) => setTasks((prev) => prev.filter((_, i) => i !== idx));
+  const updateTask = (idx, key, val) =>
+    setTasks((prev) => prev.map((t, i) => (i === idx ? { ...t, [key]: val } : t)));
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!name.trim()) return toast.error("Name required");
+    if (tasks.some((t) => !t.title.trim() || !t.content.trim()))
+      return toast.error("All tasks need title & content");
+
+    setSaving(true);
+    try {
+      await api.post("/skills/custom", { name, category, tasks });
+      toast.success("Custom skill created");
+      navigate("/skills");
+    } catch {
+      toast.error("Creation failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto">
+      <Link to="/skills" className="btn btn-ghost mb-6">← Back</Link>
+
+      <div className="card bg-base-100 shadow-xl">
+        <div className="card-body space-y-8">
+          <h2 className="card-title text-2xl">Create Custom Skill</h2>
+          <p className="text-sm opacity-70">
+            Your skill will be saved with <strong>(Custom)</strong> in the title.
+          </p>
+
+          <form onSubmit={handleSubmit} className="space-y-8">
+            <div>
+              <label className="label">Skill Name</label>
+              <input
+                className="input input-bordered w-full"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Pixel Art Basics"
+              />
+            </div>
+
+            <div>
+              <label className="label">Category</label>
+              <select
+                className="select select-bordered w-full"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+              >
+                {CATEGORIES.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-4">
+              <label className="label">Tasks</label>
+              {tasks.map((t, i) => (
+                <div key={i} className="space-y-2">
+                  <input
+                    className="input input-bordered w-full"
+                    placeholder="Task title"
+                    value={t.title}
+                    onChange={(e) => updateTask(i, "title", e.target.value)}
+                  />
+                  <textarea
+                    className="textarea textarea-bordered w-full min-h-[6rem]"
+                    placeholder="Task details"
+                    value={t.content}
+                    onChange={(e) => updateTask(i, "content", e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-error btn-xs"
+                    onClick={() => removeTask(i)}
+                  >
+                    Remove task
+                  </button>
+                </div>
+              ))}
+
+              <button
+                type="button"
+                className="btn btn-outline btn-secondary"
+                onClick={addTask}
+              >
+                <PlusIcon className="h-5 w-5 mr-2" />
+                Add Task
+              </button>
+            </div>
+
+            <div className="text-right">
+              <button type="submit" className="btn btn-primary px-8" disabled={saving}>
+                {saving ? "Saving…" : "Create Custom Skill"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 ===== FILE: frontend\src\views\user\DashboardPage.jsx =====
 // frontend/src/views/user/DashboardPage.jsx
 import { useEffect, useState } from "react";
@@ -1901,7 +1990,7 @@ export default function DashboardSkillDetailPage() {
   const [entry, setEntry] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // fetch your learning entry (with tasks + your completedTasks)
+  
   useEffect(() => {
     api
       .get(`/learning/${skillId}`)
@@ -1921,7 +2010,7 @@ export default function DashboardSkillDetailPage() {
     return <p className="text-center py-20">Skill not found.</p>;
   }
 
-  // pick the correct tree image for a given percent
+  
   const stageSrc = (p) => {
     if (p === 0)   return "/trees/seed.png";
     if (p < 25)    return "/trees/sprout.png";
@@ -1940,7 +2029,6 @@ export default function DashboardSkillDetailPage() {
   const handleToggle = async (index) => {
     try {
       const { data } = await api.patch(`/learning/${skillId}/task/${index}`);
-      // merge in the updated completedTasks array
       setEntry((prev) => ({ ...prev, completedTasks: data.completedTasks }));
     } catch {
       toast.error("Could not update that task");

@@ -9,8 +9,7 @@ import UserSkillsListPage from './views/user/UserSkillsListPage';
 import UserSkillDetailPage from './views/user/UserSkillDetailPage';
 import DashboardSkillDetailPage from './views/user/DashboardSkillDetailPage';
 import SkillForestPage from './views/user/SkillForestPage';
-import CreateCustomSkillPage from './views/user/CreateCustomSkillPage'; // NEW
-
+import CreateCustomSkillPage from './views/user/CreateCustomSkillPage'; 
 import AdminSkillsListPage from './views/admin/AdminSkillsListPage';
 import AdminCreateSkillPage from './views/admin/AdminCreateSkillPage';
 import AdminSkillDetailPage from './views/admin/AdminSkillDetailPage';
@@ -42,7 +41,6 @@ export default function App() {
 
             <Route path="/forest" element={isLoggedIn ? <SkillForestPage /> : <Navigate to="/login" replace />} />
 
-            {/* NEW: Create Custom Skill */}
             <Route path="/custom-skill" element={isLoggedIn ? <CreateCustomSkillPage /> : <Navigate to="/login" replace />} />
           </Routes>
         ) : (

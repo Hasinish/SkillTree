@@ -9,7 +9,7 @@ export default function DashboardSkillDetailPage() {
   const [entry, setEntry] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // fetch your learning entry (with tasks + your completedTasks)
+  
   useEffect(() => {
     api
       .get(`/learning/${skillId}`)
@@ -29,7 +29,7 @@ export default function DashboardSkillDetailPage() {
     return <p className="text-center py-20">Skill not found.</p>;
   }
 
-  // pick the correct tree image for a given percent
+  
   const stageSrc = (p) => {
     if (p === 0)   return "/trees/seed.png";
     if (p < 25)    return "/trees/sprout.png";
@@ -39,16 +39,15 @@ export default function DashboardSkillDetailPage() {
     return "/trees/full-tree.png";
   };
 
-  // progress
+
   const total = entry.tasks.length;
   const done  = entry.completedTasks.filter(Boolean).length;
   const pct   = total ? Math.round((done / total) * 100) : 0;
 
-  // toggle a task's completion state
+
   const handleToggle = async (index) => {
     try {
       const { data } = await api.patch(`/learning/${skillId}/task/${index}`);
-      // merge in the updated completedTasks array
       setEntry((prev) => ({ ...prev, completedTasks: data.completedTasks }));
     } catch {
       toast.error("Could not update that task");
@@ -67,14 +66,14 @@ export default function DashboardSkillDetailPage() {
             <h1 className="text-2xl font-bold mb-1">{entry.name}</h1>
             <p className="text-sm opacity-70 mb-2">{entry.category}</p>
 
-            {/* Tree stage image */}
+            
             <div className="flex flex-col items-center mb-4 w-full">
               <img
                 src={stageSrc(pct)}
                 alt="Skill growth stage"
                 className="w-40 h-40 object-contain"
               />
-              {/* NEW: progress bar under the tree */}
+              
               <div className="w-full mt-2">
                 <SkillProgressBar percent={pct} />
               </div>

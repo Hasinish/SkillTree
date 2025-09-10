@@ -50,6 +50,10 @@ export default function DashboardSkillDetailPage() {
       if (typeof data?.xp === "number") {
         window.dispatchEvent(new CustomEvent("xp:update", { detail: { xp: data.xp } }));
       }
+      // Refresh navbar COINS badge
+      if (typeof data?.coins === "number") {
+        window.dispatchEvent(new CustomEvent("coins:update", { detail: { coins: data.coins } }));
+      }
 
       // XP toast
       if (typeof data?.deltaXp === "number" && data.deltaXp !== 0) {
@@ -67,10 +71,13 @@ export default function DashboardSkillDetailPage() {
         );
       }
 
-      // Trigger daily streak tick only when marking as done (not unmarking)
+      // Trigger daily streak tick only on mark-as-done
       if (data?.deltaXp && data.deltaXp > 0) {
         try {
           const streak = await api.post("/streak/tick");
+          if (typeof streak?.data?.coins === "number") {
+            window.dispatchEvent(new CustomEvent("coins:update", { detail: { coins: streak.data.coins } }));
+          }
           if (streak?.data?.deltaCoins > 0) {
             toast.success(`Daily streak +${streak.data.deltaCoins} coins`);
           }

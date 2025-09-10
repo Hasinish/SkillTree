@@ -1,20 +1,7 @@
 import User from "../models/User.js";
 import Skill from "../models/Skill.js";
 import { XP_PER_TASK } from "../config/xp.js";
-import {
-  COINS_PER_TASK,
-  COINS_DAILY_CAP,
-  MILESTONE_BONUSES,
-} from "../config/coins.js";
-
-// helper: compute today's earned coins from ledger
-function coinsEarnedToday(user) {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // midnight local
-  return user.coinTransactions
-    .filter(tx => tx.type === "earn" && tx.createdAt >= start)
-    .reduce((sum, tx) => sum + tx.amount, 0);
-}
+import { COINS_PER_TASK, MILESTONE_BONUSES } from "../config/coins.js";
 
 export async function startLearning(req, res) {
   try {
@@ -107,7 +94,7 @@ export async function toggleTask(req, res) {
     entry.completedTasks[idx] = !wasCompleted;
     entry.lastUpdated = new Date();
 
-    // ===== XP logic (existing) =====
+    // ===== XP logic =====
     let deltaXp = 0;
     if (!wasCompleted) {
       deltaXp = XP_PER_TASK;
@@ -117,31 +104,24 @@ export async function toggleTask(req, res) {
       user.xp = Math.max(0, user.xp - XP_PER_TASK);
     }
 
-    // ===== COINS logic (NEW) =====
+    // ===== COINS logic (no caps; simple mode) =====
     let deltaCoins = 0;
     let awardedMilestones = [];
 
-    // Base task coins
+    // Base task coins (+2) when marking complete; remove when unmarking.
     if (!wasCompleted) {
-      const todayEarned = coinsEarnedToday(user);
-      let room = Math.max(0, COINS_DAILY_CAP - todayEarned);
-      const add = Math.min(COINS_PER_TASK, room);
-      if (add > 0) {
-        user.coins += add;
-        deltaCoins += add;
-        user.coinTransactions.push({
-          type: "earn",
-          amount: add,
-          reason: "task_complete",
-          skill: entry.skill,
-          meta: { taskIndex: idx },
-          createdAt: new Date(),
-        });
-        room -= add;
-      }
-      // if room==0, silently skip awarding (cap reached)
+      user.coins += COINS_PER_TASK;
+      deltaCoins += COINS_PER_TASK;
+      user.coinTransactions.push({
+        type: "earn",
+        amount: COINS_PER_TASK,
+        reason: "task_complete",
+        skill: entry.skill,
+        meta: { taskIndex: idx },
+        createdAt: new Date(),
+      });
     } else {
-      // unmark: remove base task coins (no daily-cap check; do not go below 0)
+      // unmark: remove base task coins; do not go below 0
       const sub = COINS_PER_TASK;
       user.coins = Math.max(0, user.coins - sub);
       deltaCoins -= sub;
@@ -161,30 +141,24 @@ export async function toggleTask(req, res) {
     const pct  = total ? Math.round((done / total) * 100) : 0;
 
     if (!wasCompleted && total > 0) {
-      let todayEarned = coinsEarnedToday(user); // recompute to respect cap before milestones
-      let room = Math.max(0, COINS_DAILY_CAP - todayEarned);
-
       for (const t of [25, 50, 75, 100]) {
         const already = entry.milestones?.get(String(t)) || false;
         if (pct >= t && !already) {
           const bonus = MILESTONE_BONUSES[t] || 0;
-          const add = Math.min(bonus, room);
-          if (add > 0) {
-            user.coins += add;
-            deltaCoins += add;
+          if (bonus > 0) {
+            user.coins += bonus;
+            deltaCoins += bonus;
             awardedMilestones.push(t);
             user.coinTransactions.push({
               type: "earn",
-              amount: add,
+              amount: bonus,
               reason: `milestone_${t}`,
               skill: entry.skill,
               meta: { percent: t },
               createdAt: new Date(),
             });
-            room -= add;
           }
-          // regardless of cap, mark milestone as achieved (so it won't attempt again)
-          entry.milestones.set(String(t), true);
+          entry.milestones.set(String(t), true); // mark one-time
         }
       }
     }

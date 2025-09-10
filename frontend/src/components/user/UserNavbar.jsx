@@ -7,7 +7,8 @@ import {
   GridIcon,
   TreesIcon,
   PlusCircleIcon,
-  TrophyIcon, 
+  TrophyIcon,
+  CoinsIcon,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { clearAuth, getToken, getIsAdmin } from "../../lib/auth";
@@ -22,40 +23,47 @@ export default function UserNavbar() {
   const [forestMode, setForestMode] = useState(
     localStorage.getItem("theme") === "forest"
   );
-  const [xp, setXp] = useState(null); 
+  const [xp, setXp] = useState(null);
+  const [coins, setCoins] = useState(null);
 
-  
   useEffect(() => {
     const theme = forestMode ? "forest" : "light-forest";
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("theme", theme);
   }, [forestMode]);
 
-  
-  const fetchXp = async () => {
+  const fetchTotals = async () => {
     if (!loggedIn) {
       setXp(null);
+      setCoins(null);
       return;
     }
     try {
       const { data } = await api.get("/users/me");
       setXp(typeof data?.xp === "number" ? data.xp : 0);
+      setCoins(typeof data?.coins === "number" ? data.coins : 0);
     } catch {
-      
+      /* no-op */
     }
   };
 
   useEffect(() => {
-    fetchXp();
+    fetchTotals();
   }, [pathname, loggedIn]);
 
-  
   useEffect(() => {
-    const handler = (e) => {
+    const xpHandler = (e) => {
       if (typeof e?.detail?.xp === "number") setXp(e.detail.xp);
     };
-    window.addEventListener("xp:update", handler);
-    return () => window.removeEventListener("xp:update", handler);
+    const coinHandler = (e) => {
+      if (typeof e?.detail?.coins === "number") setCoins(e.detail.coins);
+    };
+    window.addEventListener("xp:update", xpHandler);
+    window.addEventListener("coins:update", coinHandler);
+    return () => {
+      window.removeEventListener("xp:update", xpHandler);
+      window.removeEventListener("coins:update", coinHandler);
+    };
   }, []);
 
   const logout = () => {
@@ -78,15 +86,24 @@ export default function UserNavbar() {
         </Link>
 
         <div className="flex items-center space-x-2 sm:space-x-4">
-          {/* XP badge (only when logged in) */}
+          {/* XP & Coins badges */}
           {loggedIn && (
-            <span
-              className="badge badge-primary px-3 py-2 text-xs sm:text-sm flex items-center gap-1"
-              title="Total XP"
-            >
-              <TrophyIcon className="h-3.5 w-3.5" />
-              <span>XP {xp ?? "—"}</span>
-            </span>
+            <>
+              <span
+                className="badge badge-primary px-3 py-2 text-xs sm:text-sm flex items-center gap-1"
+                title="Total XP"
+              >
+                <TrophyIcon className="h-3.5 w-3.5" />
+                <span>XP {xp ?? "—"}</span>
+              </span>
+              <span
+                className="badge bg-amber-200 text-amber-900 px-3 py-2 text-xs sm:text-sm flex items-center gap-1"
+                title="Total Coins"
+              >
+                <CoinsIcon className="h-3.5 w-3.5" />
+                <span>{coins ?? "—"} coins</span>
+              </span>
+            </>
           )}
 
           <button

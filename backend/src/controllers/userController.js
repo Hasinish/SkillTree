@@ -1,23 +1,17 @@
 import User from "../models/User.js";
 import { XP_PER_TASK } from "../config/xp.js";
-import {
-  COINS_PER_TASK,
-  MILESTONE_BONUSES,
-} from "../config/coins.js";
+import { COINS_PER_TASK, MILESTONE_BONUSES } from "../config/coins.js";
+import { getRankForXp } from "../config/ranks.js";
 
-// Helper to compute XP from all existing completed tasks
 function computeXpFromLearning(user) {
   if (!user?.learningSkills?.length) return 0;
   let doneTasks = 0;
   for (const e of user.learningSkills) {
-    if (Array.isArray(e.completedTasks)) {
-      doneTasks += e.completedTasks.filter(Boolean).length;
-    }
+    if (Array.isArray(e.completedTasks)) doneTasks += e.completedTasks.filter(Boolean).length;
   }
   return doneTasks * XP_PER_TASK;
 }
 
-// Helper to compute Coins (base + milestones only; not time-based streak/reflection)
 function computeCoinsFromLearning(user) {
   let base = 0;
   let milestoneSum = 0;
@@ -28,7 +22,6 @@ function computeCoinsFromLearning(user) {
     base += done * COINS_PER_TASK;
 
     const pct = total ? Math.round((done / total) * 100) : 0;
-    // Mark and add one-time milestone bonuses when currently eligible
     if (!e.milestones) e.milestones = new Map();
     for (const t of [25,50,75,100]) {
       const k = String(t);
@@ -47,15 +40,15 @@ export async function getMe(req, res) {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: "User not found" });
 
-    // Reconcile XP
     const computedXp = computeXpFromLearning(user);
     if (user.xp !== computedXp) user.xp = computedXp;
 
-    // Reconcile COINS (base + milestones)
-    const { totalCoins } = computeCoinsFromLearning(user);
-    if (user.coins !== totalCoins) user.coins = totalCoins;
+    const { totalCoins: baseline } = computeCoinsFromLearning(user);
+    if (user.coins < baseline) user.coins = baseline;
 
     await user.save();
+
+    const rank = getRankForXp(user.xp || 0);
 
     res.json({
       username: user.username,
@@ -64,6 +57,7 @@ export async function getMe(req, res) {
       coins: user.coins,
       createdAt: user.createdAt,
       xpPerTask: XP_PER_TASK,
+      rank,
     });
   } catch {
     res.status(500).json({ message: "Server error" });

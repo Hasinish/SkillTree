@@ -381,6 +381,9 @@ import { connectDB } from "./config/db.js";
 import skillsRoutes from "./routes/skillsRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import learningRoutes from "./routes/learningRoutes.js";
+import usersRoutes from "./routes/usersRoutes.js";
+import streakRoutes from "./routes/streakRoutes.js";        
+import reflectionsRoutes from "./routes/reflectionsRoutes.js"; 
 
 dotenv.config();
 connectDB();
@@ -392,9 +395,26 @@ app.use(express.json());
 app.use("/api/skills", skillsRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/learning", learningRoutes);
+app.use("/api/users", usersRoutes);
+app.use("/api/streak", streakRoutes);           
+app.use("/api/reflections", reflectionsRoutes); 
 
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => console.log("Server running on port", PORT));
+
+
+===== FILE: backend\src\config\coins.js =====
+// Single source of truth for COINS values
+export const COINS_PER_TASK = 2;                 // base reward per completed task
+export const COINS_DAILY_CAP = 30;               // max coins per (server) day from earns
+export const MILESTONE_BONUSES = {               // one-time per skill
+  25: 3,
+  50: 5,
+  75: 7,
+  100: 10,
+};
+export const STREAK_MAX_DAILY_BONUS = 5;         // min(streakCount, 5)
+export const WEEKLY_REFLECTION_BONUS = 3;        // (endpoint provided; call when you add UI)
 
 
 ===== FILE: backend\src\config\db.js =====
@@ -414,12 +434,52 @@ export const connectDB = async () => {
 
 }
 
+===== FILE: backend\src\config\xp.js =====
+// Single source of truth for XP values
+export const XP_PER_TASK = 10;
+
+
 ===== FILE: backend\src\controllers\authController.js =====
 import User from "../models/User.js";
 import jwt from "jsonwebtoken";
+import { XP_PER_TASK } from "../config/xp.js";
+import { COINS_PER_TASK, MILESTONE_BONUSES } from "../config/coins.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || "replace_this_with_env_secret";
 
+function computeXpFromLearning(user) {
+  if (!user?.learningSkills?.length) return 0;
+  let doneTasks = 0;
+  for (const e of user.learningSkills) {
+    if (Array.isArray(e.completedTasks)) {
+      doneTasks += e.completedTasks.filter(Boolean).length;
+    }
+  }
+  return doneTasks * XP_PER_TASK;
+}
+
+function computeCoinsFromLearning(user) {
+  let base = 0;
+  let milestoneSum = 0;
+  for (const e of user.learningSkills) {
+    if (!e || !Array.isArray(e.completedTasks)) continue;
+    const total = e.completedTasks.length;
+    const done  = e.completedTasks.filter(Boolean).length;
+    base += done * COINS_PER_TASK;
+
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    if (!e.milestones) e.milestones = new Map();
+    for (const t of [25,50,75,100]) {
+      const k = String(t);
+      const already = e.milestones.get(k) || false;
+      if (pct >= t && !already) {
+        milestoneSum += (MILESTONE_BONUSES[t] || 0);
+        e.milestones.set(k, true);
+      }
+    }
+  }
+  return { totalCoins: base + milestoneSum };
+}
 
 export async function register(req, res) {
   try {
@@ -431,23 +491,23 @@ export async function register(req, res) {
       return res.status(409).json({ message: "Username taken" });
 
     const user = await new User({ username, password }).save();
-    
-    const token = jwt.sign(
-      { id: user._id, isAdmin: user.isAdmin },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+
+    const token = jwt.sign({ id: user._id, isAdmin: user.isAdmin }, JWT_SECRET, {
+      expiresIn: "7d",
+    });
 
     res.status(201).json({
       username: user.username,
       token,
-      isAdmin: user.isAdmin,  
+      isAdmin: user.isAdmin,
+      xp: user.xp,
+      xpPerTask: XP_PER_TASK,
+      coins: user.coins,
     });
   } catch {
     res.status(500).json({ message: "Server error" });
   }
 }
-
 
 export async function login(req, res) {
   try {
@@ -459,16 +519,26 @@ export async function login(req, res) {
     if (!user || !(await user.comparePassword(password)))
       return res.status(401).json({ message: "Invalid credentials" });
 
-    const token = jwt.sign(
-      { id: user._id, isAdmin: user.isAdmin },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    // Reconcile XP + coins
+    const computedXp = computeXpFromLearning(user);
+    if (user.xp !== computedXp) user.xp = computedXp;
+
+    const { totalCoins } = computeCoinsFromLearning(user);
+    if (user.coins !== totalCoins) user.coins = totalCoins;
+
+    await user.save();
+
+    const token = jwt.sign({ id: user._id, isAdmin: user.isAdmin }, JWT_SECRET, {
+      expiresIn: "7d",
+    });
 
     res.json({
       username: user.username,
       token,
-      isAdmin: user.isAdmin,  
+      isAdmin: user.isAdmin,
+      xp: user.xp,
+      xpPerTask: XP_PER_TASK,
+      coins: user.coins,
     });
   } catch {
     res.status(500).json({ message: "Server error" });
@@ -479,7 +549,21 @@ export async function login(req, res) {
 ===== FILE: backend\src\controllers\learningController.js =====
 import User from "../models/User.js";
 import Skill from "../models/Skill.js";
+import { XP_PER_TASK } from "../config/xp.js";
+import {
+  COINS_PER_TASK,
+  COINS_DAILY_CAP,
+  MILESTONE_BONUSES,
+} from "../config/coins.js";
 
+// helper: compute today's earned coins from ledger
+function coinsEarnedToday(user) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // midnight local
+  return user.coinTransactions
+    .filter(tx => tx.type === "earn" && tx.createdAt >= start)
+    .reduce((sum, tx) => sum + tx.amount, 0);
+}
 
 export async function startLearning(req, res) {
   try {
@@ -487,13 +571,12 @@ export async function startLearning(req, res) {
     const skill = await Skill.findById(req.params.skillId);
     if (!skill) return res.status(404).json({ message: "Skill not found" });
 
-    const exists = user.learningSkills.some(e =>
-      e.skill.equals(skill._id)
-    );
+    const exists = user.learningSkills.some((e) => e.skill.equals(skill._id));
     if (!exists) {
       user.learningSkills.push({
         skill: skill._id,
         completedTasks: Array(skill.tasks.length).fill(false),
+        milestones: {}, // initialize
       });
       await user.save();
     }
@@ -503,38 +586,170 @@ export async function startLearning(req, res) {
   }
 }
 
-
 export async function getLearningSkills(req, res) {
   try {
     const user = await User.findById(req.user.id).populate("learningSkills.skill");
-    const payload = user.learningSkills.map(e => ({
-      _id:            e.skill._id,
-      name:           e.skill.name,
-      category:       e.skill.category,
-      tasks:          e.skill.tasks,
+
+    // Clean up orphaned refs
+    const before = user.learningSkills.length;
+    user.learningSkills = user.learningSkills.filter((e) => !!e.skill);
+    if (user.learningSkills.length !== before) await user.save();
+
+    const payload = user.learningSkills.map((e) => ({
+      _id: e.skill._id,
+      name: e.skill.name,
+      category: e.skill.category,
+      tasks: e.skill.tasks,
       completedTasks: e.completedTasks,
+      xpPerTask: XP_PER_TASK,
     }));
+
     res.json(payload);
   } catch {
     res.status(500).json({ message: "Server error" });
   }
 }
 
-
 export async function getLearningSkill(req, res) {
   try {
     const user = await User.findById(req.user.id).populate("learningSkills.skill");
-    const entry = user.learningSkills.find(e =>
-      e.skill._id.equals(req.params.skillId)
+    const entry = user.learningSkills.find(
+      (e) => e.skill && e.skill._id.equals(req.params.skillId)
     );
     if (!entry) return res.status(404).json({ message: "Not learning this skill" });
 
     res.json({
-      _id:            entry.skill._id,
-      name:           entry.skill.name,
-      category:       entry.skill.category,
-      tasks:          entry.skill.tasks,
+      _id: entry.skill._id,
+      name: entry.skill.name,
+      category: entry.skill.category,
+      tasks: entry.skill.tasks,
       completedTasks: entry.completedTasks,
+      xpPerTask: XP_PER_TASK,
+    });
+  } catch {
+    res.status(500).json({ message: "Server error" });
+  }
+}
+
+export async function toggleTask(req, res) {
+  try {
+    const idx = parseInt(req.params.taskIndex, 10);
+    const user = await User.findById(req.user.id);
+    const entry = user.learningSkills.find((e) => e.skill.equals(req.params.skillId));
+    if (!entry) return res.status(404).json({ message: "Not learning this skill" });
+
+    // Realign length if tasks array changed
+    const skillDoc = await Skill.findById(req.params.skillId);
+    if (skillDoc) {
+      const needed = skillDoc.tasks.length;
+      if (entry.completedTasks.length !== needed) {
+        entry.completedTasks = Array(needed)
+          .fill(false)
+          .map((_, i) => entry.completedTasks[i] || false);
+      }
+    }
+    if (Number.isNaN(idx) || idx < 0 || idx >= entry.completedTasks.length) {
+      return res.status(400).json({ message: "Invalid task index" });
+    }
+
+    const wasCompleted = !!entry.completedTasks[idx];
+    entry.completedTasks[idx] = !wasCompleted;
+    entry.lastUpdated = new Date();
+
+    // ===== XP logic (existing) =====
+    let deltaXp = 0;
+    if (!wasCompleted) {
+      deltaXp = XP_PER_TASK;
+      user.xp += XP_PER_TASK;
+    } else {
+      deltaXp = -XP_PER_TASK;
+      user.xp = Math.max(0, user.xp - XP_PER_TASK);
+    }
+
+    // ===== COINS logic (NEW) =====
+    let deltaCoins = 0;
+    let awardedMilestones = [];
+
+    // Base task coins
+    if (!wasCompleted) {
+      const todayEarned = coinsEarnedToday(user);
+      let room = Math.max(0, COINS_DAILY_CAP - todayEarned);
+      const add = Math.min(COINS_PER_TASK, room);
+      if (add > 0) {
+        user.coins += add;
+        deltaCoins += add;
+        user.coinTransactions.push({
+          type: "earn",
+          amount: add,
+          reason: "task_complete",
+          skill: entry.skill,
+          meta: { taskIndex: idx },
+          createdAt: new Date(),
+        });
+        room -= add;
+      }
+      // if room==0, silently skip awarding (cap reached)
+    } else {
+      // unmark: remove base task coins (no daily-cap check; do not go below 0)
+      const sub = COINS_PER_TASK;
+      user.coins = Math.max(0, user.coins - sub);
+      deltaCoins -= sub;
+      user.coinTransactions.push({
+        type: "earn",
+        amount: 0, // keep earns positive; log reversal in meta
+        reason: "unmark_task",
+        skill: entry.skill,
+        meta: { taskIndex: idx, reversed: COINS_PER_TASK },
+        createdAt: new Date(),
+      });
+    }
+
+    // Milestones (one-time awards; do NOT revoke on unmark)
+    const total = entry.completedTasks.length || (skillDoc ? skillDoc.tasks.length : 0);
+    const done = entry.completedTasks.filter(Boolean).length;
+    const pct  = total ? Math.round((done / total) * 100) : 0;
+
+    if (!wasCompleted && total > 0) {
+      let todayEarned = coinsEarnedToday(user); // recompute to respect cap before milestones
+      let room = Math.max(0, COINS_DAILY_CAP - todayEarned);
+
+      for (const t of [25, 50, 75, 100]) {
+        const already = entry.milestones?.get(String(t)) || false;
+        if (pct >= t && !already) {
+          const bonus = MILESTONE_BONUSES[t] || 0;
+          const add = Math.min(bonus, room);
+          if (add > 0) {
+            user.coins += add;
+            deltaCoins += add;
+            awardedMilestones.push(t);
+            user.coinTransactions.push({
+              type: "earn",
+              amount: add,
+              reason: `milestone_${t}`,
+              skill: entry.skill,
+              meta: { percent: t },
+              createdAt: new Date(),
+            });
+            room -= add;
+          }
+          // regardless of cap, mark milestone as achieved (so it won't attempt again)
+          entry.milestones.set(String(t), true);
+        }
+      }
+    }
+
+    await user.save();
+
+    res.json({
+      completedTasks: entry.completedTasks,
+      xp: user.xp,
+      deltaXp,
+      coins: user.coins,
+      deltaCoins,
+      awardedMilestones,
+      coinsPerTask: COINS_PER_TASK,
+      milestoneBonuses: MILESTONE_BONUSES,
+      xpPerTask: XP_PER_TASK,
     });
   } catch {
     res.status(500).json({ message: "Server error" });
@@ -542,23 +757,61 @@ export async function getLearningSkill(req, res) {
 }
 
 
-export async function toggleTask(req, res) {
+===== FILE: backend\src\controllers\reflectionsController.js =====
+import User from "../models/User.js";
+import { WEEKLY_REFLECTION_BONUS, COINS_DAILY_CAP } from "../config/coins.js";
+
+// helpers
+function coinsEarnedToday(user) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return user.coinTransactions
+    .filter(tx => tx.type === "earn" && tx.createdAt >= start)
+    .reduce((sum, tx) => sum + tx.amount, 0);
+}
+
+function isoWeekKey(d = new Date()) {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  // Thursday in current week decides the year
+  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));
+  // First day of year
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  // Calculate week number
+  const weekNo = Math.ceil(((date - yearStart) / 86400000 + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+
+export async function submitReflection(req, res) {
   try {
-    const idx = parseInt(req.params.taskIndex, 10);
     const user = await User.findById(req.user.id);
-    const entry = user.learningSkills.find(e =>
-      e.skill.equals(req.params.skillId)
-    );
-    if (!entry) return res.status(404).json({ message: "Not learning this skill" });
-    if (isNaN(idx) || idx < 0 || idx >= entry.completedTasks.length) {
-      return res.status(400).json({ message: "Invalid task index" });
+    const wk = isoWeekKey(new Date());
+
+    if (user.reflectionWeeks.includes(wk)) {
+      return res.json({ coins: user.coins, deltaCoins: 0, week: wk, alreadySubmitted: true });
     }
 
-    entry.completedTasks[idx] = !entry.completedTasks[idx];
-    entry.lastUpdated = new Date();
+    const todayEarned = coinsEarnedToday(user);
+    const room = Math.max(0, COINS_DAILY_CAP - todayEarned);
+    const add = Math.min(WEEKLY_REFLECTION_BONUS, room);
+
+    let deltaCoins = 0;
+    if (add > 0) {
+      user.coins += add;
+      deltaCoins = add;
+      user.coinTransactions.push({
+        type: "earn",
+        amount: add,
+        reason: "weekly_reflection",
+        skill: null,
+        meta: { week: wk },
+        createdAt: new Date(),
+      });
+    }
+
+    user.reflectionWeeks.push(wk);
     await user.save();
 
-    res.json({ completedTasks: entry.completedTasks });
+    res.json({ coins: user.coins, deltaCoins, week: wk });
   } catch {
     res.status(500).json({ message: "Server error" });
   }
@@ -567,6 +820,7 @@ export async function toggleTask(req, res) {
 
 ===== FILE: backend\src\controllers\skillsController.js =====
 import Skill from "../models/Skill.js";
+import User from "../models/User.js";
 
 export async function getAllSkills(req, res) {
   try {
@@ -614,6 +868,13 @@ export async function updateSkill(req, res) {
 
 export async function deleteSkill(req, res) {
   try {
+    const inUse = await User.exists({ "learningSkills.skill": req.params.id });
+    if (inUse) {
+      return res
+        .status(409)
+        .json({ message: "Cannot delete: users are learning this skill" });
+    }
+
     const deleted = await Skill.findByIdAndDelete(req.params.id);
     if (!deleted) return res.status(404).json({ message: "Skill not found" });
     res.json({ message: "Skill deleted" });
@@ -622,7 +883,7 @@ export async function deleteSkill(req, res) {
   }
 }
 
-/** Allow regular users to create a custom skill; the name is forced to include " (Custom)". */
+
 export async function createCustomSkill(req, res) {
   try {
     const { name, category, tasks } = req.body;
@@ -634,6 +895,151 @@ export async function createCustomSkill(req, res) {
     res.status(201).json(created);
   } catch {
     res.status(500).json({ message: "Internal server error" });
+  }
+}
+
+
+===== FILE: backend\src\controllers\streakController.js =====
+import User from "../models/User.js";
+import { STREAK_MAX_DAILY_BONUS } from "../config/coins.js";
+import { COINS_DAILY_CAP } from "../config/coins.js";
+
+// helper
+function coinsEarnedToday(user) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return user.coinTransactions
+    .filter(tx => tx.type === "earn" && tx.createdAt >= start)
+    .reduce((sum, tx) => sum + tx.amount, 0);
+}
+
+export async function tickStreak(req, res) {
+  try {
+    const user = await User.findById(req.user.id);
+    const today = new Date();
+    const last = user.lastStreakDate ? new Date(user.lastStreakDate) : null;
+
+    const isSameDay =
+      last &&
+      last.getFullYear() === today.getFullYear() &&
+      last.getMonth() === today.getMonth() &&
+      last.getDate() === today.getDate();
+
+    if (isSameDay) {
+      // already counted today; return current values without double-award
+      return res.json({ streakCount: user.streakCount, coins: user.coins, deltaCoins: 0 });
+    }
+
+    // compute day diff
+    let nextCount = 1;
+    if (last) {
+      const diffDays = Math.floor((today - new Date(last.getFullYear(), last.getMonth(), last.getDate())) / 86400000);
+      nextCount = diffDays === 1 ? user.streakCount + 1 : 1;
+    }
+
+    // award coins with daily cap
+    const todayEarned = coinsEarnedToday(user);
+    let room = Math.max(0, COINS_DAILY_CAP - todayEarned);
+
+    const bonus = Math.min(nextCount, STREAK_MAX_DAILY_BONUS);
+    const add = Math.min(bonus, room);
+
+    let deltaCoins = 0;
+    if (add > 0) {
+      user.coins += add;
+      deltaCoins += add;
+      user.coinTransactions.push({
+        type: "earn",
+        amount: add,
+        reason: "streak_bonus",
+        skill: null,
+        meta: { streakCount: nextCount },
+        createdAt: new Date(),
+      });
+    }
+
+    user.streakCount = nextCount;
+    user.lastStreakDate = today;
+
+    await user.save();
+
+    res.json({ streakCount: user.streakCount, coins: user.coins, deltaCoins });
+  } catch {
+    res.status(500).json({ message: "Server error" });
+  }
+}
+
+
+===== FILE: backend\src\controllers\userController.js =====
+import User from "../models/User.js";
+import { XP_PER_TASK } from "../config/xp.js";
+import {
+  COINS_PER_TASK,
+  MILESTONE_BONUSES,
+} from "../config/coins.js";
+
+// Helper to compute XP from all existing completed tasks
+function computeXpFromLearning(user) {
+  if (!user?.learningSkills?.length) return 0;
+  let doneTasks = 0;
+  for (const e of user.learningSkills) {
+    if (Array.isArray(e.completedTasks)) {
+      doneTasks += e.completedTasks.filter(Boolean).length;
+    }
+  }
+  return doneTasks * XP_PER_TASK;
+}
+
+// Helper to compute Coins (base + milestones only; not time-based streak/reflection)
+function computeCoinsFromLearning(user) {
+  let base = 0;
+  let milestoneSum = 0;
+  for (const e of user.learningSkills) {
+    if (!e || !Array.isArray(e.completedTasks)) continue;
+    const total = e.completedTasks.length;
+    const done  = e.completedTasks.filter(Boolean).length;
+    base += done * COINS_PER_TASK;
+
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    // Mark and add one-time milestone bonuses when currently eligible
+    if (!e.milestones) e.milestones = new Map();
+    for (const t of [25,50,75,100]) {
+      const k = String(t);
+      const already = e.milestones.get(k) || false;
+      if (pct >= t && !already) {
+        milestoneSum += (MILESTONE_BONUSES[t] || 0);
+        e.milestones.set(k, true);
+      }
+    }
+  }
+  return { totalCoins: base + milestoneSum };
+}
+
+export async function getMe(req, res) {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    // Reconcile XP
+    const computedXp = computeXpFromLearning(user);
+    if (user.xp !== computedXp) user.xp = computedXp;
+
+    // Reconcile COINS (base + milestones)
+    const { totalCoins } = computeCoinsFromLearning(user);
+    if (user.coins !== totalCoins) user.coins = totalCoins;
+
+    await user.save();
+
+    res.json({
+      username: user.username,
+      isAdmin: user.isAdmin,
+      xp: user.xp,
+      coins: user.coins,
+      createdAt: user.createdAt,
+      xpPerTask: XP_PER_TASK,
+    });
+  } catch {
+    res.status(500).json({ message: "Server error" });
   }
 }
 
@@ -704,22 +1110,44 @@ const learningSkillSchema = new mongoose.Schema({
     type: [Boolean],
     default: [],
   },
-  startedAt: {
-    type: Date,
-    default: Date.now,
+  // NEW: track one-time milestone awards per skill
+  milestones: {
+    type: Map,
+    of: Boolean,
+    default: {},   // keys: "25","50","75","100"
   },
-  lastUpdated: {
-    type: Date,
-    default: Date.now,
-  },
+  startedAt: { type: Date, default: Date.now },
+  lastUpdated: { type: Date, default: Date.now },
 });
+
+const coinTxnSchema = new mongoose.Schema({
+  type: { type: String, enum: ["earn","spend"], default: "earn" },
+  amount: { type: Number, required: true },  // positive values
+  reason: { type: String, required: true },  // e.g., "task_complete", "milestone_25", "streak_bonus"
+  skill: { type: mongoose.Schema.Types.ObjectId, ref: "Skill", default: null },
+  meta: { type: Object, default: {} },
+  createdAt: { type: Date, default: Date.now },
+}, { _id: false });
 
 const userSchema = new mongoose.Schema(
   {
     username:       { type: String, required: true, unique: true },
     password:       { type: String, required: true },
     isAdmin:        { type: Boolean, default: false },
+
     learningSkills: [learningSkillSchema],
+
+    // XP already exists
+    xp:             { type: Number, default: 0 },
+
+    // NEW: coin economy (earn-only for now)
+    coins:          { type: Number, default: 0 },
+    coinTransactions: { type: [coinTxnSchema], default: [] },
+
+    // NEW: streak & reflections (earn-only helpers)
+    streakCount:     { type: Number, default: 0 },
+    lastStreakDate:  { type: Date, default: null },
+    reflectionWeeks: { type: [String], default: [] }, // ISO week keys like "2025-W37"
   },
   { timestamps: true }
 );
@@ -770,6 +1198,19 @@ router.patch("/:skillId/task/:taskIndex", toggleTask);
 export default router;
 
 
+===== FILE: backend\src\routes\reflectionsRoutes.js =====
+import express from "express";
+import { protect } from "../middleware/authMiddleware.js";
+import { submitReflection } from "../controllers/reflectionsController.js";
+
+const router = express.Router();
+router.use(protect);
+
+router.post("/", submitReflection); // call when a weekly reflection is submitted
+
+export default router;
+
+
 ===== FILE: backend\src\routes\skillsRoutes.js =====
 import express from "express";
 import {
@@ -778,7 +1219,7 @@ import {
   createSkill,
   updateSkill,
   deleteSkill,
-  createCustomSkill, // NEW
+  createCustomSkill, 
 } from "../controllers/skillsController.js";
 import { protect, admin } from "../middleware/authMiddleware.js";
 
@@ -786,7 +1227,7 @@ const router = express.Router();
 
 router.get("/", getAllSkills);
 
-// NEW: allow any authenticated user to create a custom skill
+
 router.post("/custom", protect, createCustomSkill);
 
 router.get("/:id", getSkillById);
@@ -794,6 +1235,31 @@ router.get("/:id", getSkillById);
 router.post("/", protect, admin, createSkill);
 router.put("/:id", protect, admin, updateSkill);
 router.delete("/:id", protect, admin, deleteSkill);
+
+export default router;
+
+
+===== FILE: backend\src\routes\streakRoutes.js =====
+import express from "express";
+import { protect } from "../middleware/authMiddleware.js";
+import { tickStreak } from "../controllers/streakController.js";
+
+const router = express.Router();
+router.use(protect);
+
+router.post("/tick", tickStreak); // call once after first task completion of the day
+
+export default router;
+
+
+===== FILE: backend\src\routes\usersRoutes.js =====
+import express from "express";
+import { protect } from "../middleware/authMiddleware.js";
+import { getMe } from "../controllers/userController.js";
+
+const router = express.Router();
+
+router.get("/me", protect, getMe);
 
 export default router;
 
@@ -817,13 +1283,16 @@ import AdminSkillsListPage from './views/admin/AdminSkillsListPage';
 import AdminCreateSkillPage from './views/admin/AdminCreateSkillPage';
 import AdminSkillDetailPage from './views/admin/AdminSkillDetailPage';
 
+
+import ProfilePage from './views/user/ProfilePage';
+
 export default function App() {
   const { pathname } = useLocation();
   const token      = getToken();
   const isAdmin    = getIsAdmin();
   const isLoggedIn = !!token;
 
-  const isUserRoute = ['/login','/register','/dashboard','/skills','/forest','/custom-skill']
+  const isUserRoute = ['/login','/register','/dashboard','/skills','/forest','/custom-skill','/profile']
     .some(p => pathname.startsWith(p));
 
   return (
@@ -845,6 +1314,9 @@ export default function App() {
             <Route path="/forest" element={isLoggedIn ? <SkillForestPage /> : <Navigate to="/login" replace />} />
 
             <Route path="/custom-skill" element={isLoggedIn ? <CreateCustomSkillPage /> : <Navigate to="/login" replace />} />
+
+            
+            <Route path="/profile" element={isLoggedIn ? <ProfilePage /> : <Navigate to="/login" replace />} />
           </Routes>
         ) : (
           <main className="max-w-5xl mx-auto px-4 py-10">
@@ -1295,10 +1767,12 @@ import {
   BookOpenIcon,
   GridIcon,
   TreesIcon,
-  PlusCircleIcon, // NEW
+  PlusCircleIcon,
+  TrophyIcon, 
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { clearAuth, getToken, getIsAdmin } from "../../lib/auth";
+import api from "../../lib/axios";
 
 export default function UserNavbar() {
   const navigate = useNavigate();
@@ -1309,16 +1783,49 @@ export default function UserNavbar() {
   const [forestMode, setForestMode] = useState(
     localStorage.getItem("theme") === "forest"
   );
+  const [xp, setXp] = useState(null); 
+
+  
   useEffect(() => {
     const theme = forestMode ? "forest" : "light-forest";
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("theme", theme);
   }, [forestMode]);
 
+  
+  const fetchXp = async () => {
+    if (!loggedIn) {
+      setXp(null);
+      return;
+    }
+    try {
+      const { data } = await api.get("/users/me");
+      setXp(typeof data?.xp === "number" ? data.xp : 0);
+    } catch {
+      
+    }
+  };
+
+  useEffect(() => {
+    fetchXp();
+  }, [pathname, loggedIn]);
+
+  
+  useEffect(() => {
+    const handler = (e) => {
+      if (typeof e?.detail?.xp === "number") setXp(e.detail.xp);
+    };
+    window.addEventListener("xp:update", handler);
+    return () => window.removeEventListener("xp:update", handler);
+  }, []);
+
   const logout = () => {
     clearAuth();
     navigate("/login");
   };
+
+  const isActive = (p) =>
+    pathname === p || (p !== "/dashboard" && pathname.startsWith(p));
 
   return (
     <nav className="bg-secondary-content shadow-md">
@@ -1331,7 +1838,18 @@ export default function UserNavbar() {
           <span>SkillTree</span>
         </Link>
 
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-2 sm:space-x-4">
+          {/* XP badge (only when logged in) */}
+          {loggedIn && (
+            <span
+              className="badge badge-primary px-3 py-2 text-xs sm:text-sm flex items-center gap-1"
+              title="Total XP"
+            >
+              <TrophyIcon className="h-3.5 w-3.5" />
+              <span>XP {xp ?? "—"}</span>
+            </span>
+          )}
+
           <button
             aria-label="Toggle theme"
             className="btn btn-ghost btn-circle btn-sm"
@@ -1344,7 +1862,9 @@ export default function UserNavbar() {
             <>
               <Link
                 to="/dashboard"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${pathname === "/dashboard" ? "btn-active" : ""}`}
+                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
+                  isActive("/dashboard") ? "btn-active" : ""
+                }`}
               >
                 <HomeIcon className="h-4 w-4" />
                 <span>Dashboard</span>
@@ -1352,16 +1872,19 @@ export default function UserNavbar() {
 
               <Link
                 to="/skills"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${pathname.startsWith("/skills") ? "btn-active" : ""}`}
+                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
+                  isActive("/skills") ? "btn-active" : ""
+                }`}
               >
                 <BookOpenIcon className="h-4 w-4" />
                 <span>Skills</span>
               </Link>
 
-              {/* NEW: Create Custom Skill */}
               <Link
                 to="/custom-skill"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${pathname.startsWith("/custom-skill") ? "btn-active" : ""}`}
+                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
+                  isActive("/custom-skill") ? "btn-active" : ""
+                }`}
               >
                 <PlusCircleIcon className="h-4 w-4" />
                 <span>Create Custom Skill</span>
@@ -1369,7 +1892,9 @@ export default function UserNavbar() {
 
               <Link
                 to="/forest"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${pathname.startsWith("/forest") ? "btn-active" : ""}`}
+                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
+                  isActive("/forest") ? "btn-active" : ""
+                }`}
               >
                 <TreesIcon className="h-4 w-4" />
                 <span>Forest View</span>
@@ -1990,10 +2515,8 @@ export default function DashboardSkillDetailPage() {
   const [entry, setEntry] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  
   useEffect(() => {
-    api
-      .get(`/learning/${skillId}`)
+    api.get(`/learning/${skillId}`)
       .then((res) => setEntry(res.data))
       .catch(() => toast.error("Could not load skill details"))
       .finally(() => setLoading(false));
@@ -2010,7 +2533,6 @@ export default function DashboardSkillDetailPage() {
     return <p className="text-center py-20">Skill not found.</p>;
   }
 
-  
   const stageSrc = (p) => {
     if (p === 0)   return "/trees/seed.png";
     if (p < 25)    return "/trees/sprout.png";
@@ -2020,41 +2542,78 @@ export default function DashboardSkillDetailPage() {
     return "/trees/full-tree.png";
   };
 
-  // progress
-  const total = entry.tasks.length;
-  const done  = entry.completedTasks.filter(Boolean).length;
-  const pct   = total ? Math.round((done / total) * 100) : 0;
+  const xpPerTask = entry.xpPerTask ?? 10;
+  const totalTasks = entry.tasks.length;
+  const doneTasks  = entry.completedTasks.filter(Boolean).length;
+  const pct        = totalTasks ? Math.round((doneTasks / totalTasks) * 100) : 0;
 
-  // toggle a task's completion state
   const handleToggle = async (index) => {
     try {
       const { data } = await api.patch(`/learning/${skillId}/task/${index}`);
       setEntry((prev) => ({ ...prev, completedTasks: data.completedTasks }));
+
+      // Refresh navbar XP badge
+      if (typeof data?.xp === "number") {
+        window.dispatchEvent(new CustomEvent("xp:update", { detail: { xp: data.xp } }));
+      }
+
+      // XP toast
+      if (typeof data?.deltaXp === "number" && data.deltaXp !== 0) {
+        const sign = data.deltaXp > 0 ? "+" : "";
+        toast.success(`${sign}${data.deltaXp} XP`);
+      }
+
+      // COINS toast(s)
+      if (typeof data?.deltaCoins === "number" && data.deltaCoins > 0) {
+        toast.success(`+${data.deltaCoins} coins`);
+      }
+      if (Array.isArray(data?.awardedMilestones) && data.awardedMilestones.length) {
+        data.awardedMilestones.forEach((t) =>
+          toast.success(`Milestone ${t}%! +${data.milestoneBonuses?.[t] ?? ""} coins`)
+        );
+      }
+
+      // Trigger daily streak tick only when marking as done (not unmarking)
+      if (data?.deltaXp && data.deltaXp > 0) {
+        try {
+          const streak = await api.post("/streak/tick");
+          if (streak?.data?.deltaCoins > 0) {
+            toast.success(`Daily streak +${streak.data.deltaCoins} coins`);
+          }
+        } catch { /* no-op */ }
+      }
     } catch {
       toast.error("Could not update that task");
     }
   };
 
+  const earnedXp = doneTasks * xpPerTask;
+  const totalEarnableXp = totalTasks * xpPerTask;
+
   return (
     <div className="min-h-screen bg-neutral p-6">
       <div className="max-w-3xl mx-auto space-y-6">
-        <Link to="/dashboard" className="btn btn-ghost">
-          ← Back to Dashboard
-        </Link>
+        <div className="flex items-center justify-between">
+          <Link to="/dashboard" className="btn btn-ghost">
+            ← Back to Dashboard
+          </Link>
+          {/* Per-skill XP (done/total_earnable) */}
+          <div className="badge badge-primary px-4 py-3 text-sm">
+            XP: {earnedXp}/{totalEarnableXp}
+          </div>
+        </div>
 
         <div className="card bg-base-100 shadow">
           <div className="card-body">
             <h1 className="text-2xl font-bold mb-1">{entry.name}</h1>
             <p className="text-sm opacity-70 mb-2">{entry.category}</p>
 
-            {/* Tree stage image */}
             <div className="flex flex-col items-center mb-4 w-full">
               <img
                 src={stageSrc(pct)}
                 alt="Skill growth stage"
                 className="w-40 h-40 object-contain"
               />
-              {/* NEW: progress bar under the tree */}
               <div className="w-full mt-2">
                 <SkillProgressBar percent={pct} />
               </div>
@@ -2159,6 +2718,79 @@ export default function LoginPage() {
           </Link>
         </p>
       </form>
+    </div>
+  );
+}
+
+
+===== FILE: frontend\src\views\user\ProfilePage.jsx =====
+import { useEffect, useState } from "react";
+import api from "../../lib/axios";
+import toast from "react-hot-toast";
+import { formatDate } from "../../lib/utils";
+import { Link } from "react-router-dom";
+
+export default function ProfilePage() {
+  const [me, setMe] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.get("/users/me")
+      .then((res) => setMe(res.data))
+      .catch(() => toast.error("Could not load profile"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-20">
+        <span className="loading loading-spinner loading-lg"></span>
+      </div>
+    );
+  }
+
+  if (!me) {
+    return <p className="text-center py-20">Profile unavailable.</p>;
+  }
+
+  return (
+    <div className="min-h-screen bg-neutral p-6">
+      <div className="max-w-2xl mx-auto">
+        <div className="flex items-center justify-between mb-6">
+          <Link to="/dashboard" className="btn btn-ghost">← Back</Link>
+          <h1 className="text-2xl font-bold">My Profile</h1>
+          <div />
+        </div>
+
+        <div className="card bg-base-100 shadow">
+          <div className="card-body space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm opacity-70">Username</div>
+                <div className="text-lg font-semibold">{me.username}</div>
+              </div>
+              <div className="badge badge-primary px-4 py-3 text-sm">
+                XP {me.xp}
+              </div>
+            </div>
+
+            <div className="divider my-2"></div>
+
+            <div className="text-sm opacity-70">
+              Member since{" "}
+              <span className="font-medium">
+                {me.createdAt ? formatDate(new Date(me.createdAt)) : "—"}
+              </span>
+            </div>
+
+            {me.isAdmin && (
+              <div className="alert alert-info mt-2">
+                <span>You are an admin.</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -14,13 +14,16 @@ import AdminSkillsListPage from './views/admin/AdminSkillsListPage';
 import AdminCreateSkillPage from './views/admin/AdminCreateSkillPage';
 import AdminSkillDetailPage from './views/admin/AdminSkillDetailPage';
 
+
+import ProfilePage from './views/user/ProfilePage';
+
 export default function App() {
   const { pathname } = useLocation();
   const token      = getToken();
   const isAdmin    = getIsAdmin();
   const isLoggedIn = !!token;
 
-  const isUserRoute = ['/login','/register','/dashboard','/skills','/forest','/custom-skill']
+  const isUserRoute = ['/login','/register','/dashboard','/skills','/forest','/custom-skill','/profile']
     .some(p => pathname.startsWith(p));
 
   return (
@@ -42,6 +45,9 @@ export default function App() {
             <Route path="/forest" element={isLoggedIn ? <SkillForestPage /> : <Navigate to="/login" replace />} />
 
             <Route path="/custom-skill" element={isLoggedIn ? <CreateCustomSkillPage /> : <Navigate to="/login" replace />} />
+
+            
+            <Route path="/profile" element={isLoggedIn ? <ProfilePage /> : <Navigate to="/login" replace />} />
           </Routes>
         ) : (
           <main className="max-w-5xl mx-auto px-4 py-10">

@@ -1,10 +1,11 @@
 import User from "../models/User.js";
-import jwt from "jsonwebtoken";
 import { XP_PER_TASK } from "../config/xp.js";
-import { COINS_PER_TASK, MILESTONE_BONUSES } from "../config/coins.js";
+import {
+  COINS_PER_TASK,
+  MILESTONE_BONUSES,
+} from "../config/coins.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || "replace_this_with_env_secret";
-
+// Helper to compute XP from all existing completed tasks
 function computeXpFromLearning(user) {
   if (!user?.learningSkills?.length) return 0;
   let doneTasks = 0;
@@ -16,6 +17,7 @@ function computeXpFromLearning(user) {
   return doneTasks * XP_PER_TASK;
 }
 
+// Helper to compute Coins (base + milestones only; not time-based streak/reflection)
 function computeCoinsFromLearning(user) {
   let base = 0;
   let milestoneSum = 0;
@@ -26,6 +28,7 @@ function computeCoinsFromLearning(user) {
     base += done * COINS_PER_TASK;
 
     const pct = total ? Math.round((done / total) * 100) : 0;
+    // Mark and add one-time milestone bonuses when currently eligible
     if (!e.milestones) e.milestones = new Map();
     for (const t of [25,50,75,100]) {
       const k = String(t);
@@ -39,64 +42,28 @@ function computeCoinsFromLearning(user) {
   return { totalCoins: base + milestoneSum };
 }
 
-export async function register(req, res) {
+export async function getMe(req, res) {
   try {
-    const { username, password } = req.body;
-    if (!username || !password)
-      return res.status(400).json({ message: "Missing fields" });
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
 
-    if (await User.findOne({ username }))
-      return res.status(409).json({ message: "Username taken" });
-
-    const user = await new User({ username, password }).save();
-
-    const token = jwt.sign({ id: user._id, isAdmin: user.isAdmin }, JWT_SECRET, {
-      expiresIn: "7d",
-    });
-
-    res.status(201).json({
-      username: user.username,
-      token,
-      isAdmin: user.isAdmin,
-      xp: user.xp,
-      xpPerTask: XP_PER_TASK,
-      coins: user.coins,
-    });
-  } catch {
-    res.status(500).json({ message: "Server error" });
-  }
-}
-
-export async function login(req, res) {
-  try {
-    const { username, password } = req.body;
-    if (!username || !password)
-      return res.status(400).json({ message: "Missing fields" });
-
-    const user = await User.findOne({ username });
-    if (!user || !(await user.comparePassword(password)))
-      return res.status(401).json({ message: "Invalid credentials" });
-
-    // Reconcile XP + coins
+    // Reconcile XP
     const computedXp = computeXpFromLearning(user);
     if (user.xp !== computedXp) user.xp = computedXp;
 
+    // Reconcile COINS (base + milestones)
     const { totalCoins } = computeCoinsFromLearning(user);
     if (user.coins !== totalCoins) user.coins = totalCoins;
 
     await user.save();
 
-    const token = jwt.sign({ id: user._id, isAdmin: user.isAdmin }, JWT_SECRET, {
-      expiresIn: "7d",
-    });
-
     res.json({
       username: user.username,
-      token,
       isAdmin: user.isAdmin,
       xp: user.xp,
-      xpPerTask: XP_PER_TASK,
       coins: user.coins,
+      createdAt: user.createdAt,
+      xpPerTask: XP_PER_TASK,
     });
   } catch {
     res.status(500).json({ message: "Server error" });

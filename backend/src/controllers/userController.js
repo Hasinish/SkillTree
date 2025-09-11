@@ -3,6 +3,7 @@ import { XP_PER_TASK } from "../config/xp.js";
 import { COINS_PER_TASK, MILESTONE_BONUSES } from "../config/coins.js";
 import { getRankForXp } from "../config/ranks.js";
 
+/** ---------- Helpers to reconcile XP & Coins from learning state ---------- */
 function computeXpFromLearning(user) {
   if (!user?.learningSkills?.length) return 0;
   let doneTasks = 0;
@@ -35,6 +36,7 @@ function computeCoinsFromLearning(user) {
   return { totalCoins: base + milestoneSum };
 }
 
+/** ---------- GET /api/users/me ---------- */
 export async function getMe(req, res) {
   try {
     const user = await User.findById(req.user.id);
@@ -58,6 +60,45 @@ export async function getMe(req, res) {
       createdAt: user.createdAt,
       xpPerTask: XP_PER_TASK,
       rank,
+      // NEW
+      inventory: user.inventory ?? [],
+    });
+  } catch {
+    res.status(500).json({ message: "Server error" });
+  }
+}
+
+/** ---------- GET /api/users/leaderboard ---------- */
+export async function getLeaderboard(req, res) {
+  try {
+    const limit  = Math.min(parseInt(req.query.limit ?? "50", 10), 200);
+    const offset = Math.max(parseInt(req.query.offset ?? "0", 10), 0);
+
+    const users = await User.find({}, "username xp createdAt")
+      .sort({ xp: -1, createdAt: 1 })
+      .skip(offset)
+      .limit(limit)
+      .lean();
+
+    const decorated = users.map((u, i) => ({
+      username: u.username,
+      xp: u.xp ?? 0,
+      rank: getRankForXp(u.xp ?? 0),
+      position: offset + i + 1,
+    }));
+
+    const me = await User.findById(req.user.id, "xp").lean();
+    let myPosition = null;
+    if (me) {
+      const ahead = await User.countDocuments({ xp: { $gt: me.xp ?? 0 } });
+      myPosition = ahead + 1;
+    }
+
+    res.json({
+      items: decorated,
+      limit,
+      offset,
+      me: myPosition != null ? { position: myPosition, xp: me?.xp ?? 0, rank: getRankForXp(me?.xp ?? 0) } : null,
     });
   } catch {
     res.status(500).json({ message: "Server error" });

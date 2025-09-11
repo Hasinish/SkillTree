@@ -9,6 +9,8 @@ import {
   PlusCircleIcon,
   TrophyIcon,
   CoinsIcon,
+  AwardIcon,
+  StoreIcon,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { clearAuth, getToken, getIsAdmin } from "../../lib/auth";
@@ -42,22 +44,14 @@ export default function UserNavbar() {
       const { data } = await api.get("/users/me");
       setXp(typeof data?.xp === "number" ? data.xp : 0);
       setCoins(typeof data?.coins === "number" ? data.coins : 0);
-    } catch {
-      /* no-op */
-    }
+    } catch { /* no-op */ }
   };
 
-  useEffect(() => {
-    fetchTotals();
-  }, [pathname, loggedIn]);
+  useEffect(() => { fetchTotals(); }, [pathname, loggedIn]);
 
   useEffect(() => {
-    const xpHandler = (e) => {
-      if (typeof e?.detail?.xp === "number") setXp(e.detail.xp);
-    };
-    const coinHandler = (e) => {
-      if (typeof e?.detail?.coins === "number") setCoins(e.detail.coins);
-    };
+    const xpHandler = (e) => { if (typeof e?.detail?.xp === "number") setXp(e.detail.xp); };
+    const coinHandler = (e) => { if (typeof e?.detail?.coins === "number") setCoins(e.detail.coins); };
     window.addEventListener("xp:update", xpHandler);
     window.addEventListener("coins:update", coinHandler);
     return () => {
@@ -66,13 +60,9 @@ export default function UserNavbar() {
     };
   }, []);
 
-  const logout = () => {
-    clearAuth();
-    navigate("/login");
-  };
+  const logout = () => { clearAuth(); navigate("/login"); };
 
-  const isActive = (p) =>
-    pathname === p || (p !== "/dashboard" && pathname.startsWith(p));
+  const isActive = (p) => pathname === p || (p !== "/dashboard" && pathname.startsWith(p));
 
   return (
     <nav className="bg-secondary-content shadow-md">
@@ -86,20 +76,13 @@ export default function UserNavbar() {
         </Link>
 
         <div className="flex items-center space-x-2 sm:space-x-4">
-          {/* XP & Coins badges */}
           {loggedIn && (
             <>
-              <span
-                className="badge badge-primary px-3 py-2 text-xs sm:text-sm flex items-center gap-1"
-                title="Total XP"
-              >
+              <span className="badge badge-primary px-3 py-2 text-xs sm:text-sm flex items-center gap-1" title="Total XP">
                 <TrophyIcon className="h-3.5 w-3.5" />
                 <span>XP {xp ?? "—"}</span>
               </span>
-              <span
-                className="badge bg-amber-200 text-amber-900 px-3 py-2 text-xs sm:text-sm flex items-center gap-1"
-                title="Total Coins"
-              >
+              <span className="badge bg-amber-200 text-amber-900 px-3 py-2 text-xs sm:text-sm flex items-center gap-1" title="Total Coins">
                 <CoinsIcon className="h-3.5 w-3.5" />
                 <span>{coins ?? "—"} coins</span>
               </span>
@@ -116,44 +99,35 @@ export default function UserNavbar() {
 
           {loggedIn ? (
             <>
-              <Link
-                to="/dashboard"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
-                  isActive("/dashboard") ? "btn-active" : ""
-                }`}
-              >
+              <Link to="/dashboard" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/dashboard") ? "btn-active" : ""}`}>
                 <HomeIcon className="h-4 w-4" />
                 <span>Dashboard</span>
               </Link>
 
-              <Link
-                to="/skills"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
-                  isActive("/skills") ? "btn-active" : ""
-                }`}
-              >
+              <Link to="/skills" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/skills") ? "btn-active" : ""}`}>
                 <BookOpenIcon className="h-4 w-4" />
                 <span>Skills</span>
               </Link>
 
-              <Link
-                to="/custom-skill"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
-                  isActive("/custom-skill") ? "btn-active" : ""
-                }`}
-              >
+              <Link to="/custom-skill" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/custom-skill") ? "btn-active" : ""}`}>
                 <PlusCircleIcon className="h-4 w-4" />
                 <span>Create Custom Skill</span>
               </Link>
 
-              <Link
-                to="/forest"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
-                  isActive("/forest") ? "btn-active" : ""
-                }`}
-              >
+              <Link to="/forest" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/forest") ? "btn-active" : ""}`}>
                 <TreesIcon className="h-4 w-4" />
                 <span>Forest View</span>
+              </Link>
+
+              {/* NEW: Shop */}
+              <Link to="/shop" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/shop") ? "btn-active" : ""}`}>
+                <StoreIcon className="h-4 w-4" />
+                <span>Shop</span>
+              </Link>
+
+              <Link to="/leaderboard" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/leaderboard") ? "btn-active" : ""}`}>
+                <AwardIcon className="h-4 w-4" />
+                <span>Leaderboard</span>
               </Link>
 
               <button onClick={logout} className="btn btn-primary btn-sm flex items-center space-x-1">

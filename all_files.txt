@@ -382,8 +382,9 @@ import skillsRoutes from "./routes/skillsRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import learningRoutes from "./routes/learningRoutes.js";
 import usersRoutes from "./routes/usersRoutes.js";
-import streakRoutes from "./routes/streakRoutes.js";        
-import reflectionsRoutes from "./routes/reflectionsRoutes.js"; 
+import streakRoutes from "./routes/streakRoutes.js";
+import reflectionsRoutes from "./routes/reflectionsRoutes.js";
+import shopRoutes from "./routes/shopRoutes.js";
 
 dotenv.config();
 connectDB();
@@ -396,8 +397,10 @@ app.use("/api/skills", skillsRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/learning", learningRoutes);
 app.use("/api/users", usersRoutes);
-app.use("/api/streak", streakRoutes);           
-app.use("/api/reflections", reflectionsRoutes); 
+app.use("/api/streak", streakRoutes);
+app.use("/api/reflections", reflectionsRoutes);
+// NEW:
+app.use("/api/shop", shopRoutes);
 
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => console.log("Server running on port", PORT));
@@ -468,6 +471,23 @@ export function getRankForXp(xp = 0) {
 
   return { current, next, progressToNext, toNext };
 }
+
+
+===== FILE: backend\src\config\shop.js =====
+// backend/src/config/shop.js
+// Icon files are served by the frontend at /shop/<id>.png (public folder).
+// Make sure you place your PNGs in: frontend/public/shop/
+
+export const SHOP_ITEMS = [
+  { id: "leaf-banner",   name: "Leaf Banner",   price: 8,  icon: "/shop/leaf-banner.png",   desc: "A leafy banner to hang on trees." },
+  { id: "bird-house",    name: "Bird House",    price: 15, icon: "/shop/bird-house.png",    desc: "A cozy home for your pixel-birds." },
+  { id: "fairy-lights",  name: "Fairy Lights",  price: 20, icon: "/shop/fairy-lights.png",  desc: "String lights that twinkle at dusk." },
+  { id: "tree-ribbon",   name: "Tree Ribbon",   price: 10, icon: "/shop/tree-ribbon.png",   desc: "Tie a pretty ribbon around a trunk." },
+  { id: "ground-rocks",  name: "Ground Rocks",  price: 6,  icon: "/shop/ground-rocks.png",  desc: "Decorative stones for the base." },
+  { id: "mushroom-pack", name: "Mushroom Pack", price: 12, icon: "/shop/mushroom-pack.png", desc: "Cute mushrooms to place nearby." },
+  { id: "wind-chime",    name: "Wind Chime",    price: 18, icon: "/shop/wind-chime.png",    desc: "Soft chimes in the pixel breeze." },
+  { id: "tree-plaque",   name: "Tree Plaque",   price: 9,  icon: "/shop/tree-plaque.png",   desc: "Nameplate to label a tree." },
+];
 
 
 ===== FILE: backend\src\config\xp.js =====
@@ -582,7 +602,22 @@ import User from "../models/User.js";
 import Skill from "../models/Skill.js";
 import { XP_PER_TASK } from "../config/xp.js";
 import { COINS_PER_TASK, MILESTONE_BONUSES } from "../config/coins.js";
+import crypto from "crypto";
 
+/* ----------------- Helpers ----------------- */
+function isSkillCompleted(entry, skillDoc) {
+  const total = skillDoc?.tasks?.length ?? entry.completedTasks.length;
+  if (!total) return false;
+  if (!entry.completedTasks || entry.completedTasks.length !== total) return false;
+  return entry.completedTasks.every(Boolean);
+}
+function countByItem(list = []) {
+  const m = new Map();
+  for (const d of list) m.set(d.itemId, (m.get(d.itemId) || 0) + 1);
+  return m;
+}
+
+/* ----------------- Start / Read ----------------- */
 export async function startLearning(req, res) {
   try {
     const user = await User.findById(req.user.id);
@@ -594,7 +629,8 @@ export async function startLearning(req, res) {
       user.learningSkills.push({
         skill: skill._id,
         completedTasks: Array(skill.tasks.length).fill(false),
-        milestones: {}, // initialize
+        milestones: {},
+        decorations: [],
       });
       await user.save();
     }
@@ -608,7 +644,6 @@ export async function getLearningSkills(req, res) {
   try {
     const user = await User.findById(req.user.id).populate("learningSkills.skill");
 
-    // Clean up orphaned refs
     const before = user.learningSkills.length;
     user.learningSkills = user.learningSkills.filter((e) => !!e.skill);
     if (user.learningSkills.length !== before) await user.save();
@@ -621,7 +656,6 @@ export async function getLearningSkills(req, res) {
       completedTasks: e.completedTasks,
       xpPerTask: XP_PER_TASK,
     }));
-
     res.json(payload);
   } catch {
     res.status(500).json({ message: "Server error" });
@@ -649,6 +683,7 @@ export async function getLearningSkill(req, res) {
   }
 }
 
+/* ----------------- Toggle task (existing) ----------------- */
 export async function toggleTask(req, res) {
   try {
     const idx = parseInt(req.params.taskIndex, 10);
@@ -656,7 +691,6 @@ export async function toggleTask(req, res) {
     const entry = user.learningSkills.find((e) => e.skill.equals(req.params.skillId));
     if (!entry) return res.status(404).json({ message: "Not learning this skill" });
 
-    // Realign length if tasks array changed
     const skillDoc = await Skill.findById(req.params.skillId);
     if (skillDoc) {
       const needed = skillDoc.tasks.length;
@@ -674,7 +708,6 @@ export async function toggleTask(req, res) {
     entry.completedTasks[idx] = !wasCompleted;
     entry.lastUpdated = new Date();
 
-    // ===== XP logic =====
     let deltaXp = 0;
     if (!wasCompleted) {
       deltaXp = XP_PER_TASK;
@@ -684,11 +717,9 @@ export async function toggleTask(req, res) {
       user.xp = Math.max(0, user.xp - XP_PER_TASK);
     }
 
-    // ===== COINS logic (no caps; simple mode) =====
     let deltaCoins = 0;
     let awardedMilestones = [];
 
-    // Base task coins (+2) when marking complete; remove when unmarking.
     if (!wasCompleted) {
       user.coins += COINS_PER_TASK;
       deltaCoins += COINS_PER_TASK;
@@ -701,13 +732,12 @@ export async function toggleTask(req, res) {
         createdAt: new Date(),
       });
     } else {
-      // unmark: remove base task coins; do not go below 0
       const sub = COINS_PER_TASK;
       user.coins = Math.max(0, user.coins - sub);
       deltaCoins -= sub;
       user.coinTransactions.push({
         type: "earn",
-        amount: 0, // keep earns positive; log reversal in meta
+        amount: 0,
         reason: "unmark_task",
         skill: entry.skill,
         meta: { taskIndex: idx, reversed: COINS_PER_TASK },
@@ -715,7 +745,6 @@ export async function toggleTask(req, res) {
       });
     }
 
-    // Milestones (one-time awards; do NOT revoke on unmark)
     const total = entry.completedTasks.length || (skillDoc ? skillDoc.tasks.length : 0);
     const done = entry.completedTasks.filter(Boolean).length;
     const pct  = total ? Math.round((done / total) * 100) : 0;
@@ -738,7 +767,7 @@ export async function toggleTask(req, res) {
               createdAt: new Date(),
             });
           }
-          entry.milestones.set(String(t), true); // mark one-time
+          entry.milestones.set(String(t), true);
         }
       }
     }
@@ -756,6 +785,84 @@ export async function toggleTask(req, res) {
       milestoneBonuses: MILESTONE_BONUSES,
       xpPerTask: XP_PER_TASK,
     });
+  } catch {
+    res.status(500).json({ message: "Server error" });
+  }
+}
+
+/* ----------------- Decorations (NEW) ----------------- */
+// GET /api/learning/:skillId/decorations
+export async function getDecorations(req, res) {
+  try {
+    const user = await User.findById(req.user.id).populate("learningSkills.skill");
+    const entry = user.learningSkills.find(e => e.skill && e.skill._id.equals(req.params.skillId));
+    if (!entry) return res.status(404).json({ message: "Not learning this skill" });
+    res.json({ decorations: entry.decorations || [] });
+  } catch {
+    res.status(500).json({ message: "Server error" });
+  }
+}
+
+// PUT /api/learning/:skillId/decorations { decorations: [{id,itemId,xPct,yPct}] }
+export async function saveDecorations(req, res) {
+  try {
+    const user = await User.findById(req.user.id).populate("learningSkills.skill");
+    const entry = user.learningSkills.find(e => e.skill && e.skill._id.equals(req.params.skillId));
+    if (!entry) return res.status(404).json({ message: "Not learning this skill" });
+
+    const skillDoc = entry.skill;
+    if (!isSkillCompleted(entry, skillDoc)) {
+      return res.status(403).json({ message: "Decorations allowed only when the tree is 100% complete" });
+    }
+
+    const incoming = Array.isArray(req.body?.decorations) ? req.body.decorations : [];
+    for (const d of incoming) {
+      d.id    = String(d.id || crypto.randomUUID());
+      d.itemId= String(d.itemId);
+      d.xPct  = Math.max(0, Math.min(100, Number(d.xPct)));
+      d.yPct  = Math.max(0, Math.min(100, Number(d.yPct)));
+    }
+
+    const prev = entry.decorations || [];
+    const prevCounts = countByItem(prev);
+    const nextCounts = countByItem(incoming);
+
+    // Validate: need enough inventory for net-new placements
+    for (const [itemId, nextCount] of nextCounts.entries()) {
+      const old = prevCounts.get(itemId) || 0;
+      const delta = nextCount - old; // >0 means take from inventory
+      if (delta > 0) {
+        const inv = user.inventory.find(i => i.itemId === itemId);
+        if ((inv?.qty ?? 0) < delta) {
+          return res.status(400).json({ message: `Not enough "${itemId}" in inventory (${delta} more needed)` });
+        }
+      }
+    }
+
+    // Return removed items
+    for (const [itemId, oldCount] of prevCounts.entries()) {
+      const nextCount = nextCounts.get(itemId) || 0;
+      const delta = nextCount - oldCount; // negative => return
+      if (delta < 0) {
+        const inv = user.inventory.find(i => i.itemId === itemId);
+        if (inv) inv.qty += Math.abs(delta); else user.inventory.push({ itemId, qty: Math.abs(delta) });
+      }
+    }
+    // Consume new items
+    for (const [itemId, nextCount] of nextCounts.entries()) {
+      const oldCount = prevCounts.get(itemId) || 0;
+      const delta = nextCount - oldCount; // positive => spend
+      if (delta > 0) {
+        const inv = user.inventory.find(i => i.itemId === itemId);
+        if (inv) { inv.qty -= delta; if (inv.qty < 0) inv.qty = 0; }
+      }
+    }
+
+    entry.decorations = incoming;
+    entry.lastUpdated = new Date();
+    await user.save();
+
+    res.json({ decorations: entry.decorations, inventory: user.inventory });
   } catch {
     res.status(500).json({ message: "Server error" });
   }
@@ -785,6 +892,58 @@ export async function submitReflection(req, res) {
     }
 
     res.json({ coins: user.coins, deltaCoins: 0, week: wk, reflectionsCoinsDisabled: true });
+  } catch {
+    res.status(500).json({ message: "Server error" });
+  }
+}
+
+
+===== FILE: backend\src\controllers\shopController.js =====
+// backend/src/controllers/shopController.js
+import User from "../models/User.js";
+import { SHOP_ITEMS } from "../config/shop.js";
+
+export function getItems(req, res) {
+  res.json(SHOP_ITEMS);
+}
+
+export async function buyItem(req, res) {
+  try {
+    const { itemId } = req.params;
+    const item = SHOP_ITEMS.find((it) => it.id === itemId);
+    if (!item) return res.status(404).json({ message: "Item not found" });
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    if (user.coins < item.price) {
+      return res.status(400).json({ message: "Not enough coins" });
+    }
+
+    user.coins -= item.price;
+    user.coinTransactions.push({
+      type: "spend",
+      amount: item.price,
+      reason: "shop_purchase",
+      skill: null,
+      meta: { itemId: item.id, itemName: item.name },
+      createdAt: new Date(),
+    });
+
+    const existing = user.inventory.find((i) => i.itemId === item.id);
+    if (existing) {
+      existing.qty += 1;
+    } else {
+      user.inventory.push({ itemId: item.id, qty: 1, acquiredAt: new Date() });
+    }
+
+    await user.save();
+    res.json({
+      message: `Purchased ${item.name}`,
+      coins: user.coins,
+      inventory: user.inventory,
+      purchased: { itemId: item.id, name: item.name, price: item.price },
+    });
   } catch {
     res.status(500).json({ message: "Server error" });
   }
@@ -917,6 +1076,7 @@ import { XP_PER_TASK } from "../config/xp.js";
 import { COINS_PER_TASK, MILESTONE_BONUSES } from "../config/coins.js";
 import { getRankForXp } from "../config/ranks.js";
 
+/** ---------- Helpers to reconcile XP & Coins from learning state ---------- */
 function computeXpFromLearning(user) {
   if (!user?.learningSkills?.length) return 0;
   let doneTasks = 0;
@@ -949,6 +1109,7 @@ function computeCoinsFromLearning(user) {
   return { totalCoins: base + milestoneSum };
 }
 
+/** ---------- GET /api/users/me ---------- */
 export async function getMe(req, res) {
   try {
     const user = await User.findById(req.user.id);
@@ -972,6 +1133,45 @@ export async function getMe(req, res) {
       createdAt: user.createdAt,
       xpPerTask: XP_PER_TASK,
       rank,
+      // NEW
+      inventory: user.inventory ?? [],
+    });
+  } catch {
+    res.status(500).json({ message: "Server error" });
+  }
+}
+
+/** ---------- GET /api/users/leaderboard ---------- */
+export async function getLeaderboard(req, res) {
+  try {
+    const limit  = Math.min(parseInt(req.query.limit ?? "50", 10), 200);
+    const offset = Math.max(parseInt(req.query.offset ?? "0", 10), 0);
+
+    const users = await User.find({}, "username xp createdAt")
+      .sort({ xp: -1, createdAt: 1 })
+      .skip(offset)
+      .limit(limit)
+      .lean();
+
+    const decorated = users.map((u, i) => ({
+      username: u.username,
+      xp: u.xp ?? 0,
+      rank: getRankForXp(u.xp ?? 0),
+      position: offset + i + 1,
+    }));
+
+    const me = await User.findById(req.user.id, "xp").lean();
+    let myPosition = null;
+    if (me) {
+      const ahead = await User.countDocuments({ xp: { $gt: me.xp ?? 0 } });
+      myPosition = ahead + 1;
+    }
+
+    res.json({
+      items: decorated,
+      limit,
+      offset,
+      me: myPosition != null ? { position: myPosition, xp: me?.xp ?? 0, rank: getRankForXp(me?.xp ?? 0) } : null,
     });
   } catch {
     res.status(500).json({ message: "Server error" });
@@ -1035,54 +1235,56 @@ export default mongoose.model("Skill", skillSchema);
 import mongoose from "mongoose";
 import bcrypt from "bcrypt";
 
+const decorationSchema = new mongoose.Schema({
+  id:    { type: String, required: true },  // client UUID
+  itemId:{ type: String, required: true },  // SHOP_ITEMS.id
+  xPct:  { type: Number, required: true },  // 0..100
+  yPct:  { type: Number, required: true },  // 0..100
+}, { _id: false });
+
 const learningSkillSchema = new mongoose.Schema({
-  skill: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Skill",
-    required: true,
-  },
-  completedTasks: {
-    type: [Boolean],
-    default: [],
-  },
-  // NEW: track one-time milestone awards per skill
-  milestones: {
-    type: Map,
-    of: Boolean,
-    default: {},   // keys: "25","50","75","100"
-  },
+  skill: { type: mongoose.Schema.Types.ObjectId, ref: "Skill", required: true },
+  completedTasks: { type: [Boolean], default: [] },
+  milestones: { type: Map, of: Boolean, default: {} }, // "25","50","75","100"
   startedAt: { type: Date, default: Date.now },
   lastUpdated: { type: Date, default: Date.now },
+
+  // NEW: saved layout for this skill’s tree
+  decorations: { type: [decorationSchema], default: [] },
 });
 
 const coinTxnSchema = new mongoose.Schema({
-  type: { type: String, enum: ["earn","spend"], default: "earn" },
-  amount: { type: Number, required: true },  // positive values
-  reason: { type: String, required: true },  // e.g., "task_complete", "milestone_25", "streak_bonus"
+  type: { type: String, enum: ["earn", "spend"], default: "earn" },
+  amount: { type: Number, required: true },
+  reason: { type: String, required: true },
   skill: { type: mongoose.Schema.Types.ObjectId, ref: "Skill", default: null },
   meta: { type: Object, default: {} },
   createdAt: { type: Date, default: Date.now },
 }, { _id: false });
 
+const inventoryItemSchema = new mongoose.Schema({
+  itemId: { type: String, required: true },
+  qty: { type: Number, default: 1 },
+  acquiredAt: { type: Date, default: Date.now },
+}, { _id: false });
+
 const userSchema = new mongoose.Schema(
   {
-    username:       { type: String, required: true, unique: true },
-    password:       { type: String, required: true },
-    isAdmin:        { type: Boolean, default: false },
+    username: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+    isAdmin:  { type: Boolean, default: false },
 
     learningSkills: [learningSkillSchema],
 
-    // XP already exists
-    xp:             { type: Number, default: 0 },
-
-    // NEW: coin economy (earn-only for now)
-    coins:          { type: Number, default: 0 },
+    xp:    { type: Number, default: 0 },
+    coins: { type: Number, default: 0 },
     coinTransactions: { type: [coinTxnSchema], default: [] },
 
-    // NEW: streak & reflections (earn-only helpers)
+    inventory: { type: [inventoryItemSchema], default: [] },
+
     streakCount:     { type: Number, default: 0 },
     lastStreakDate:  { type: Date, default: null },
-    reflectionWeeks: { type: [String], default: [] }, // ISO week keys like "2025-W37"
+    reflectionWeeks: { type: [String], default: [] },
   },
   { timestamps: true }
 );
@@ -1119,6 +1321,8 @@ import {
   getLearningSkills,
   getLearningSkill,
   toggleTask,
+  getDecorations,   // NEW
+  saveDecorations,  // NEW
 } from "../controllers/learningController.js";
 import { protect } from "../middleware/authMiddleware.js";
 
@@ -1129,6 +1333,10 @@ router.get("/", getLearningSkills);
 router.get("/:skillId", getLearningSkill);
 router.post("/:skillId", startLearning);
 router.patch("/:skillId/task/:taskIndex", toggleTask);
+
+// NEW: decorations
+router.get("/:skillId/decorations", getDecorations);
+router.put("/:skillId/decorations", saveDecorations);
 
 export default router;
 
@@ -1142,6 +1350,21 @@ const router = express.Router();
 router.use(protect);
 
 router.post("/", submitReflection); // call when a weekly reflection is submitted
+
+export default router;
+
+
+===== FILE: backend\src\routes\shopRoutes.js =====
+// backend/src/routes/shopRoutes.js
+import express from "express";
+import { protect } from "../middleware/authMiddleware.js";
+import { getItems, buyItem } from "../controllers/shopController.js";
+
+const router = express.Router();
+router.use(protect);
+
+router.get("/items", getItems);
+router.post("/buy/:itemId", buyItem);
 
 export default router;
 
@@ -1190,11 +1413,12 @@ export default router;
 ===== FILE: backend\src\routes\usersRoutes.js =====
 import express from "express";
 import { protect } from "../middleware/authMiddleware.js";
-import { getMe } from "../controllers/userController.js";
+import { getMe, getLeaderboard } from "../controllers/userController.js";
 
 const router = express.Router();
 
 router.get("/me", protect, getMe);
+router.get("/leaderboard", protect, getLeaderboard);
 
 export default router;
 
@@ -1206,6 +1430,8 @@ import { Routes, Route, useLocation, Navigate } from 'react-router-dom';
 import { getToken, getIsAdmin } from './lib/auth';
 
 import UserNavbar from './components/user/UserNavbar';
+import AdminNavbar from './components/admin/AdminNavbar';
+
 import LoginPage from './views/user/LoginPage';
 import RegisterPage from './views/user/RegisterPage';
 import DashboardPage from './views/user/DashboardPage';
@@ -1213,13 +1439,14 @@ import UserSkillsListPage from './views/user/UserSkillsListPage';
 import UserSkillDetailPage from './views/user/UserSkillDetailPage';
 import DashboardSkillDetailPage from './views/user/DashboardSkillDetailPage';
 import SkillForestPage from './views/user/SkillForestPage';
-import CreateCustomSkillPage from './views/user/CreateCustomSkillPage'; 
+import CreateCustomSkillPage from './views/user/CreateCustomSkillPage';
 import AdminSkillsListPage from './views/admin/AdminSkillsListPage';
 import AdminCreateSkillPage from './views/admin/AdminCreateSkillPage';
 import AdminSkillDetailPage from './views/admin/AdminSkillDetailPage';
 
-
 import ProfilePage from './views/user/ProfilePage';
+import LeaderboardPage from './views/user/LeaderboardPage';
+import ShopPage from './views/user/ShopPage'; // NEW
 
 export default function App() {
   const { pathname } = useLocation();
@@ -1227,19 +1454,49 @@ export default function App() {
   const isAdmin    = getIsAdmin();
   const isLoggedIn = !!token;
 
-  const isUserRoute = ['/login','/register','/dashboard','/skills','/forest','/custom-skill','/profile']
-    .some(p => pathname.startsWith(p));
+  // Routes for regular users
+  const isUserRoute = [
+    '/login',
+    '/register',
+    '/dashboard',
+    '/skills',
+    '/forest',
+    '/custom-skill',
+    '/profile',
+    '/leaderboard',
+    '/shop', // NEW
+  ].some((p) => pathname.startsWith(p));
 
   return (
     <div className="flex flex-col h-screen bg-base-200 text-base-content">
-      <UserNavbar />
+      {isLoggedIn && isAdmin ? <AdminNavbar /> : <UserNavbar />}
 
       <div className="flex-1 overflow-auto">
         {isUserRoute ? (
           <Routes>
-            <Route path="/login" element={isLoggedIn ? <Navigate to={isAdmin ? '/' : '/dashboard'} replace /> : <LoginPage />} />
-            <Route path="/register" element={isLoggedIn ? <Navigate to={isAdmin ? '/' : '/dashboard'} replace /> : <RegisterPage />} />
+            {/* Auth */}
+            <Route
+              path="/login"
+              element={
+                isLoggedIn ? (
+                  <Navigate to={isAdmin ? '/' : '/dashboard'} replace />
+                ) : (
+                  <LoginPage />
+                )
+              }
+            />
+            <Route
+              path="/register"
+              element={
+                isLoggedIn ? (
+                  <Navigate to={isAdmin ? '/' : '/dashboard'} replace />
+                ) : (
+                  <RegisterPage />
+                )
+              }
+            />
 
+            {/* User-only pages */}
             <Route path="/dashboard" element={isLoggedIn ? <DashboardPage /> : <Navigate to="/login" replace />} />
             <Route path="/dashboard/:id" element={isLoggedIn ? <DashboardSkillDetailPage /> : <Navigate to="/login" replace />} />
 
@@ -1247,18 +1504,48 @@ export default function App() {
             <Route path="/skills/:id" element={isLoggedIn ? <UserSkillDetailPage /> : <Navigate to="/login" replace />} />
 
             <Route path="/forest" element={isLoggedIn ? <SkillForestPage /> : <Navigate to="/login" replace />} />
-
             <Route path="/custom-skill" element={isLoggedIn ? <CreateCustomSkillPage /> : <Navigate to="/login" replace />} />
 
-            
             <Route path="/profile" element={isLoggedIn ? <ProfilePage /> : <Navigate to="/login" replace />} />
+            <Route path="/leaderboard" element={isLoggedIn ? <LeaderboardPage /> : <Navigate to="/login" replace />} />
+
+            {/* NEW: Shop */}
+            <Route path="/shop" element={isLoggedIn ? <ShopPage /> : <Navigate to="/login" replace />} />
           </Routes>
         ) : (
+          // Admin area
           <main className="max-w-5xl mx-auto px-4 py-10">
             <Routes>
-              <Route path="/" element={isLoggedIn && isAdmin ? <AdminSkillsListPage /> : <Navigate to="/dashboard" replace />} />
-              <Route path="/create-skill" element={isLoggedIn && isAdmin ? <AdminCreateSkillPage /> : <Navigate to="/dashboard" replace />} />
-              <Route path="/skill/:id" element={isLoggedIn && isAdmin ? <AdminSkillDetailPage /> : <Navigate to="/dashboard" replace />} />
+              <Route
+                path="/"
+                element={
+                  isLoggedIn && isAdmin ? (
+                    <AdminSkillsListPage />
+                  ) : (
+                    <Navigate to="/dashboard" replace />
+                  )
+                }
+              />
+              <Route
+                path="/create-skill"
+                element={
+                  isLoggedIn && isAdmin ? (
+                    <AdminCreateSkillPage />
+                  ) : (
+                    <Navigate to="/dashboard" replace />
+                  )
+                }
+              />
+              <Route
+                path="/skill/:id"
+                element={
+                  isLoggedIn && isAdmin ? (
+                    <AdminSkillDetailPage />
+                  ) : (
+                    <Navigate to="/dashboard" replace />
+                  )
+                }
+              />
             </Routes>
           </main>
         )}
@@ -1338,6 +1625,22 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 
 
 ===== IMAGE FILE: frontend\public\forest\forest-bg.png =====
+
+===== IMAGE FILE: frontend\public\shop\bird-house.png =====
+
+===== IMAGE FILE: frontend\public\shop\fairy-lights.png =====
+
+===== IMAGE FILE: frontend\public\shop\ground-rocks.png =====
+
+===== IMAGE FILE: frontend\public\shop\leaf-banner.png =====
+
+===== IMAGE FILE: frontend\public\shop\mushroom-pack.png =====
+
+===== IMAGE FILE: frontend\public\shop\tree-plaque.png =====
+
+===== IMAGE FILE: frontend\public\shop\tree-ribbon.png =====
+
+===== IMAGE FILE: frontend\public\shop\wind-chime.png =====
 
 ===== IMAGE FILE: frontend\public\trees\full-tree.png =====
 
@@ -1453,20 +1756,27 @@ export function formatDate(date) {
 }
 
 ===== FILE: frontend\src\components\admin\AdminNavbar.jsx =====
-import { Link } from "react-router-dom";
-import { SunIcon, MoonIcon } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { SunIcon, MoonIcon, LogOutIcon } from "lucide-react";
 import { useState, useEffect } from "react";
+import { clearAuth } from "../../lib/auth";
 
 export default function AdminNavbar() {
   const [forestMode, setForestMode] = useState(
     localStorage.getItem("theme") === "forest"
   );
+  const navigate = useNavigate();
 
   useEffect(() => {
-    const theme = forestMode ? "forest" : "lemonade";
+    const theme = forestMode ? "forest" : "light-forest";
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("theme", theme);
   }, [forestMode]);
+
+  const logout = () => {
+    clearAuth();
+    navigate("/login");
+  };
 
   return (
     <nav className="navbar bg-base-100 shadow-md">
@@ -1475,17 +1785,27 @@ export default function AdminNavbar() {
           SkillTree&nbsp;<span className="text-primary">Admin</span>
         </Link>
 
-        <button
-          aria-label="Toggle theme"
-          className="btn btn-ghost btn-circle btn-sm"
-          onClick={() => setForestMode(!forestMode)}
-        >
-          {forestMode ? (
-            <SunIcon className="h-5 w-5" />
-          ) : (
-            <MoonIcon className="h-5 w-5" />
-          )}
-        </button>
+        <div className="flex items-center space-x-2">
+          <button
+            aria-label="Toggle theme"
+            className="btn btn-ghost btn-circle btn-sm"
+            onClick={() => setForestMode(!forestMode)}
+          >
+            {forestMode ? (
+              <SunIcon className="h-5 w-5" />
+            ) : (
+              <MoonIcon className="h-5 w-5" />
+            )}
+          </button>
+
+          <button
+            onClick={logout}
+            className="btn btn-primary btn-sm flex items-center gap-1"
+          >
+            <LogOutIcon className="h-4 w-4" />
+            <span>Log Out</span>
+          </button>
+        </div>
       </div>
     </nav>
   );
@@ -1532,6 +1852,7 @@ import {
   CrownIcon,
   GemIcon,
   StarIcon,
+  SparklesIcon, // NEW for Mythic
 } from "lucide-react";
 
 /**
@@ -1539,14 +1860,13 @@ import {
  *  - <RankBadge rank={rank} />                          // small pill (default)
  *  - <RankBadge rank={rank} variant="circle" size="xl" showLabelBelow />  // big circular emblem
  */
-
 const STYLES = {
   unranked: { bg: "bg-base-200", text: "text-base-content", ring: "ring-base-300", Icon: StarIcon },
   bronze:   { bg: "bg-amber-200", text: "text-amber-900",   ring: "ring-amber-300", Icon: MedalIcon },
   silver:   { bg: "bg-gray-200",  text: "text-gray-900",    ring: "ring-gray-300",  Icon: AwardIcon },
   gold:     { bg: "bg-yellow-200",text: "text-yellow-900",  ring: "ring-yellow-300",Icon: CrownIcon },
   diamond:  { bg: "bg-cyan-200",  text: "text-cyan-900",    ring: "ring-cyan-300",  Icon: GemIcon },
-  mythic:   { bg: "bg-purple-200",text: "text-purple-900",  ring: "ring-purple-300",Icon: CrownIcon },
+  mythic:   { bg: "bg-purple-200",text: "text-purple-900",  ring: "ring-purple-300",Icon: SparklesIcon }, // fixed
 };
 
 const SIZE = {
@@ -1559,8 +1879,8 @@ const SIZE = {
 export default function RankBadge({
   rank,
   variant = "pill",       // "pill" | "circle"
-  size = "md",            // sm | md | lg | xl  (circle variant only)
-  showLabelBelow = false, // circle variant: put rank name under the circle
+  size = "md",            // sm | md | lg | xl
+  showLabelBelow = false,
 }) {
   const key = rank?.current?.key || "unranked";
   const name = rank?.current?.name || "Unranked";
@@ -1570,16 +1890,7 @@ export default function RankBadge({
     const s = SIZE[size] || SIZE.md;
     return (
       <div className="flex flex-col items-center">
-        <div
-          className={[
-            "inline-flex items-center justify-center rounded-full shadow",
-            "ring-4 ring-offset-2",
-            bg,
-            text,
-            ring,
-            s.box,
-          ].join(" ")}
-        >
+        <div className={["inline-flex items-center justify-center rounded-full shadow","ring-4 ring-offset-2",bg,text,ring,s.box].join(" ")}>
           <Icon className={s.icon} />
         </div>
         {showLabelBelow && (
@@ -1589,7 +1900,7 @@ export default function RankBadge({
     );
   }
 
-  // Default: compact pill badge
+  // compact pill
   return (
     <span className={`badge ${bg} ${text} px-4 py-3 text-sm gap-2 flex items-center`}>
       <Icon className="h-4 w-4" />
@@ -1780,6 +2091,8 @@ import {
   PlusCircleIcon,
   TrophyIcon,
   CoinsIcon,
+  AwardIcon,
+  StoreIcon,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { clearAuth, getToken, getIsAdmin } from "../../lib/auth";
@@ -1813,22 +2126,14 @@ export default function UserNavbar() {
       const { data } = await api.get("/users/me");
       setXp(typeof data?.xp === "number" ? data.xp : 0);
       setCoins(typeof data?.coins === "number" ? data.coins : 0);
-    } catch {
-      /* no-op */
-    }
+    } catch { /* no-op */ }
   };
 
-  useEffect(() => {
-    fetchTotals();
-  }, [pathname, loggedIn]);
+  useEffect(() => { fetchTotals(); }, [pathname, loggedIn]);
 
   useEffect(() => {
-    const xpHandler = (e) => {
-      if (typeof e?.detail?.xp === "number") setXp(e.detail.xp);
-    };
-    const coinHandler = (e) => {
-      if (typeof e?.detail?.coins === "number") setCoins(e.detail.coins);
-    };
+    const xpHandler = (e) => { if (typeof e?.detail?.xp === "number") setXp(e.detail.xp); };
+    const coinHandler = (e) => { if (typeof e?.detail?.coins === "number") setCoins(e.detail.coins); };
     window.addEventListener("xp:update", xpHandler);
     window.addEventListener("coins:update", coinHandler);
     return () => {
@@ -1837,13 +2142,9 @@ export default function UserNavbar() {
     };
   }, []);
 
-  const logout = () => {
-    clearAuth();
-    navigate("/login");
-  };
+  const logout = () => { clearAuth(); navigate("/login"); };
 
-  const isActive = (p) =>
-    pathname === p || (p !== "/dashboard" && pathname.startsWith(p));
+  const isActive = (p) => pathname === p || (p !== "/dashboard" && pathname.startsWith(p));
 
   return (
     <nav className="bg-secondary-content shadow-md">
@@ -1857,20 +2158,13 @@ export default function UserNavbar() {
         </Link>
 
         <div className="flex items-center space-x-2 sm:space-x-4">
-          {/* XP & Coins badges */}
           {loggedIn && (
             <>
-              <span
-                className="badge badge-primary px-3 py-2 text-xs sm:text-sm flex items-center gap-1"
-                title="Total XP"
-              >
+              <span className="badge badge-primary px-3 py-2 text-xs sm:text-sm flex items-center gap-1" title="Total XP">
                 <TrophyIcon className="h-3.5 w-3.5" />
                 <span>XP {xp ?? "—"}</span>
               </span>
-              <span
-                className="badge bg-amber-200 text-amber-900 px-3 py-2 text-xs sm:text-sm flex items-center gap-1"
-                title="Total Coins"
-              >
+              <span className="badge bg-amber-200 text-amber-900 px-3 py-2 text-xs sm:text-sm flex items-center gap-1" title="Total Coins">
                 <CoinsIcon className="h-3.5 w-3.5" />
                 <span>{coins ?? "—"} coins</span>
               </span>
@@ -1887,44 +2181,35 @@ export default function UserNavbar() {
 
           {loggedIn ? (
             <>
-              <Link
-                to="/dashboard"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
-                  isActive("/dashboard") ? "btn-active" : ""
-                }`}
-              >
+              <Link to="/dashboard" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/dashboard") ? "btn-active" : ""}`}>
                 <HomeIcon className="h-4 w-4" />
                 <span>Dashboard</span>
               </Link>
 
-              <Link
-                to="/skills"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
-                  isActive("/skills") ? "btn-active" : ""
-                }`}
-              >
+              <Link to="/skills" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/skills") ? "btn-active" : ""}`}>
                 <BookOpenIcon className="h-4 w-4" />
                 <span>Skills</span>
               </Link>
 
-              <Link
-                to="/custom-skill"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
-                  isActive("/custom-skill") ? "btn-active" : ""
-                }`}
-              >
+              <Link to="/custom-skill" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/custom-skill") ? "btn-active" : ""}`}>
                 <PlusCircleIcon className="h-4 w-4" />
                 <span>Create Custom Skill</span>
               </Link>
 
-              <Link
-                to="/forest"
-                className={`btn btn-ghost btn-sm flex items-center space-x-1 ${
-                  isActive("/forest") ? "btn-active" : ""
-                }`}
-              >
+              <Link to="/forest" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/forest") ? "btn-active" : ""}`}>
                 <TreesIcon className="h-4 w-4" />
                 <span>Forest View</span>
+              </Link>
+
+              {/* NEW: Shop */}
+              <Link to="/shop" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/shop") ? "btn-active" : ""}`}>
+                <StoreIcon className="h-4 w-4" />
+                <span>Shop</span>
+              </Link>
+
+              <Link to="/leaderboard" className={`btn btn-ghost btn-sm flex items-center space-x-1 ${isActive("/leaderboard") ? "btn-active" : ""}`}>
+                <AwardIcon className="h-4 w-4" />
+                <span>Leaderboard</span>
               </Link>
 
               <button onClick={logout} className="btn btn-primary btn-sm flex items-center space-x-1">
@@ -2690,6 +2975,95 @@ export default function DashboardSkillDetailPage() {
 }
 
 
+===== FILE: frontend\src\views\user\LeaderboardPage.jsx =====
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import api from "../../lib/axios";
+import toast from "react-hot-toast";
+import RankBadge from "../../components/user/RankBadge";
+import { TrophyIcon } from "lucide-react";
+
+export default function LeaderboardPage() {
+  const [rows, setRows] = useState([]);
+  const [me, setMe] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const { data } = await api.get("/users/leaderboard?limit=100&offset=0");
+        setRows(data.items || []);
+        setMe(data.me || null);
+      } catch {
+        toast.error("Could not load leaderboard");
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-20">
+        <span className="loading loading-spinner loading-lg"></span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-neutral p-6">
+      <div className="max-w-3xl mx-auto space-y-6">
+        <div className="flex items-center justify-between">
+          <Link to="/dashboard" className="btn btn-ghost">← Back</Link>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <TrophyIcon className="h-6 w-6 text-primary" />
+            Global Leaderboard
+          </h1>
+          <div />
+        </div>
+
+        <div className="card bg-base-100 shadow">
+          <div className="card-body p-0">
+            <div className="overflow-x-auto">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>User</th>
+                    <th>Rank</th>
+                    <th className="text-right">XP</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={`${r.position}-${r.username}`} className={r.position === me?.position ? "bg-secondary/10" : ""}>
+                      <td className="font-semibold">{r.position}</td>
+                      <td className="font-medium">{r.username}</td>
+                      <td>
+                        <RankBadge rank={r.rank} />
+                      </td>
+                      <td className="text-right">{r.xp}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {me && (
+              <div className="p-4 border-t text-sm opacity-80">
+                You are currently <span className="font-semibold">#{me.position}</span> with{" "}
+                <span className="font-semibold">{me.xp}</span> XP.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 ===== FILE: frontend\src\views\user\LoginPage.jsx =====
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
@@ -2758,116 +3132,166 @@ export default function LoginPage() {
 
 
 ===== FILE: frontend\src\views\user\ProfilePage.jsx =====
-import { useEffect, useState } from "react";
-import api from "../../lib/axios";
-import toast from "react-hot-toast";
-import { formatDate } from "../../lib/utils";
+import { useEffect, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { TrophyIcon, CoinsIcon } from "lucide-react";
-import RankBadge from "../../components/user/RankBadge";
+import toast from "react-hot-toast";
+import { TrophyIcon, CoinsIcon, AwardIcon, MedalIcon, CrownIcon, GemIcon, StarIcon, SparklesIcon, PackageIcon } from "lucide-react";
+import api from "../../lib/axios";
+import { formatDate } from "../../lib/utils";
+
+const RANK_STYLES = {
+  unranked: { bg: "bg-base-200", text: "text-base-content", ring: "ring-base-300", Icon: StarIcon },
+  bronze:   { bg: "bg-amber-200", text: "text-amber-900",   ring: "ring-amber-300", Icon: MedalIcon },
+  silver:   { bg: "bg-gray-200",  text: "text-gray-900",    ring: "ring-gray-300",  Icon: AwardIcon },
+  gold:     { bg: "bg-yellow-200",text: "text-yellow-900",  ring: "ring-yellow-300",Icon: CrownIcon },
+  diamond:  { bg: "bg-cyan-200",  text: "text-cyan-900",    ring: "ring-cyan-300",  Icon: GemIcon },
+  mythic:   { bg: "bg-purple-200",text: "text-purple-900",  ring: "ring-purple-300",Icon: SparklesIcon},
+};
 
 export default function ProfilePage() {
   const [me, setMe] = useState(null);
+  const [catalog, setCatalog] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get("/users/me")
-      .then((res) => setMe(res.data))
+    Promise.all([api.get("/users/me"), api.get("/shop/items")])
+      .then(([meRes, shopRes]) => {
+        setMe(meRes.data);
+        setCatalog(shopRes.data || []);
+      })
       .catch(() => toast.error("Could not load profile"))
-      .finally(() => setLoading(false));
+      .finally(() => setTimeout(() => setLoading(false), 0));
   }, []);
+
+  const nameById = useMemo(() => {
+    const map = new Map();
+    for (const it of catalog) map.set(it.id, it.name);
+    return map;
+  }, [catalog]);
+
+  const iconById = useMemo(() => {
+    const map = new Map();
+    for (const it of catalog) map.set(it.id, it.icon || `/shop/${it.id}.png`);
+    return map;
+  }, [catalog]);
 
   if (loading) {
     return (
-      <div className="flex justify-center py-20">
+      <div className="flex justify-center py-24">
         <span className="loading loading-spinner loading-lg"></span>
       </div>
     );
   }
 
-  if (!me) {
-    return <p className="text-center py-20">Profile unavailable.</p>;
-  }
+  if (!me) return <p className="text-center py-24">Profile unavailable.</p>;
 
   const progress = me.rank?.progressToNext ?? 0;
   const nextName = me.rank?.next?.name || null;
   const toNext   = me.rank?.toNext ?? 0;
+  const rankKey  = me.rank?.current?.key || "unranked";
+  const rankName = me.rank?.current?.name || "Unranked";
+  const c = RANK_STYLES[rankKey] || RANK_STYLES.unranked;
+  const Icon = c.Icon;
 
   return (
-    <div className="min-h-screen bg-neutral p-6">
-      <div className="max-w-2xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <Link to="/dashboard" className="btn btn-ghost">← Back</Link>
-          <h1 className="text-2xl font-bold">My Profile</h1>
-          <div />
+    <div className="min-h-[calc(100vh-4rem)] px-4 sm:px-6 py-6">
+      <div className="max-w-3xl mx-auto space-y-6">
+        <div className="flex items-center justify-between">
+          <Link to="/dashboard" className="btn btn-ghost btn-sm">← Back</Link>
+          <h1 className="text-xl sm:text-2xl font-bold">My Profile</h1>
+          <div className="w-14" aria-hidden />
         </div>
 
-        <div className="card bg-base-100 shadow">
-          <div className="card-body space-y-6">
-            {/* Header row */}
-            <div className="flex items-center justify-between gap-3">
+        <section className="card bg-base-100 shadow-md">
+          <div className="card-body p-5 sm:p-8 space-y-8">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
-                <div className="text-sm opacity-70">Username</div>
-                <div className="text-lg font-semibold">{me.username}</div>
+                <p className="text-xs uppercase opacity-60">Username</p>
+                <p className="text-lg font-semibold break-all">{me.username}</p>
               </div>
 
-              <div className="flex items-center gap-2 flex-wrap justify-end">
-                {/* Remove tiny rank pill (we'll show the BIG one over the bar) */}
-                <div className="badge badge-primary px-4 py-3 text-sm flex items-center gap-1">
+              <div className="flex items-center gap-2">
+                <span className="badge badge-primary px-3 py-2 text-xs sm:text-sm flex items-center gap-1">
                   <TrophyIcon className="h-4 w-4" />
                   <span>XP {me.xp}</span>
-                </div>
-                <div className="badge bg-amber-200 text-amber-900 px-4 py-3 text-sm flex items-center gap-1">
+                </span>
+                <span className="badge bg-amber-200 text-amber-900 px-3 py-2 text-xs sm:text-sm flex items-center gap-1">
                   <CoinsIcon className="h-4 w-4" />
                   <span>{me.coins} coins</span>
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-col items-center text-center">
+              <div className={["rounded-full ring-4 ring-offset-2 shadow", c.bg, c.text, c.ring, "w-40 h-40 sm:w-44 sm:h-44", "flex items-center justify-center"].join(" ")}>
+                <Icon className="w-16 h-16 sm:w-20 sm:h-20" />
+              </div>
+              <div className="mt-3 font-semibold">{rankName}</div>
+              <div className="text-sm opacity-70">Your current rank</div>
+
+              <div className="mt-6 w-full">
+                <p className="text-sm opacity-70 mb-3">
+                  {nextName ? <>Progress to <span className="font-medium">{nextName}</span> — {progress}% ({toNext} XP left)</> : <>Top rank reached</>}
+                </p>
+                <div className="w-full bg-base-200 h-3 rounded-xl overflow-hidden">
+                  <div className="h-3 bg-primary rounded-xl transition-[width] duration-500 ease-out" style={{ width: `${progress}%` }} />
                 </div>
               </div>
             </div>
 
-            {/* Big centered circular Rank badge OVER the progress bar */}
-            <div className="relative pt-14">
-              {/* Badge anchored above the bar, centered */}
-              <div className="absolute left-1/2 -translate-x-1/2 -top-10 z-10">
-                <RankBadge
-                  rank={me.rank}
-                  variant="circle"
-                  size="xl"
-                  showLabelBelow
-                />
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div className="p-4 rounded-lg bg-base-200/60">
+                <p className="text-xs uppercase opacity-60">Member since</p>
+                <p className="font-medium">{me.createdAt ? formatDate(new Date(me.createdAt)) : "—"}</p>
               </div>
-
-              {/* Progress copy and bar */}
-              <div className="mt-16 text-center">
-                <div className="text-sm opacity-70 mb-2">
-                  {nextName
-                    ? <>Progress to <span className="font-medium">{nextName}</span> ({progress}%) — {toNext} XP left</>
-                    : <>Top rank reached</>}
+              {me.isAdmin && (
+                <div className="p-4 rounded-lg bg-info/10 border border-info/30">
+                  <p className="font-medium">Admin</p>
+                  <p className="text-sm opacity-80">You have administrator privileges.</p>
                 </div>
-                <div className="w-full bg-base-200 h-3 rounded overflow-hidden">
-                  <div
-                    className="h-3 rounded bg-primary transition-all"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              </div>
+              )}
             </div>
+          </div>
+        </section>
 
-            <div className="divider my-2"></div>
+        {/* Inventory with icons */}
+        <section className="card bg-base-100 shadow-md">
+          <div className="card-body">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <PackageIcon className="h-5 w-5 text-primary" />
+              Inventory
+            </h2>
 
-            <div className="text-sm opacity-70">
-              Member since{" "}
-              <span className="font-medium">
-                {me.createdAt ? formatDate(new Date(me.createdAt)) : "—"}
-              </span>
-            </div>
-
-            {me.isAdmin && (
-              <div className="alert alert-info mt-2">
-                <span>You are an admin.</span>
+            {!me.inventory || me.inventory.length === 0 ? (
+              <p className="opacity-70 mt-2">No items yet. Visit the Shop to buy decorations.</p>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                {me.inventory.map((it, idx) => {
+                  const name = nameById.get(it.itemId) || it.itemId;
+                  const src  = iconById.get(it.itemId) || `/shop/${it.itemId}.png`;
+                  return (
+                    <div key={`${it.itemId}-${idx}`} className="p-3 border border-primary bg-base-100 flex items-center gap-3">
+                      <div className="relative w-12 h-12 bg-base-200 flex items-center justify-center">
+                        <img
+                          src={src}
+                          alt={name}
+                          className="w-12 h-12 object-contain"
+                          style={{ imageRendering: "pixelated" }}
+                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                        />
+                        <span className="absolute -right-1 -bottom-1 badge badge-primary badge-sm">x{it.qty}</span>
+                      </div>
+                      <div className="flex-1">
+                        <div className="font-medium">{name}</div>
+                        <div className="text-xs opacity-70">Qty: {it.qty}</div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );
@@ -2936,54 +3360,372 @@ export default function RegisterPage() {
   );
 }
 
-===== FILE: frontend\src\views\user\SkillForestPage.jsx =====
+===== FILE: frontend\src\views\user\ShopPage.jsx =====
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../../lib/axios";
 import toast from "react-hot-toast";
+import { CoinsIcon, ShoppingCartIcon } from "lucide-react";
+
+export default function ShopPage() {
+  const [items, setItems] = useState([]);
+  const [coins, setCoins] = useState(null);
+  const [buying, setBuying] = useState(null);
+
+  const load = async () => {
+    try {
+      const [shop, me] = await Promise.all([
+        api.get("/shop/items"),
+        api.get("/users/me"),
+      ]);
+      setItems(shop.data || []);
+      setCoins(typeof me?.data?.coins === "number" ? me.data.coins : 0);
+    } catch {
+      toast.error("Could not load shop");
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const buy = async (itemId) => {
+    setBuying(itemId);
+    try {
+      const { data } = await api.post(`/shop/buy/${itemId}`);
+      setCoins(data.coins);
+      window.dispatchEvent(new CustomEvent("coins:update", { detail: { coins: data.coins } }));
+      toast.success(`Purchased ${data?.purchased?.name || "item"}!`);
+    } catch (e) {
+      toast.error(e?.response?.data?.message || "Purchase failed");
+    } finally {
+      setBuying(null);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-neutral p-6">
+      <div className="max-w-4xl mx-auto space-y-6">
+        <div className="flex items-center justify-between">
+          <Link to="/dashboard" className="btn btn-ghost">← Back</Link>
+          <h1 className="text-2xl font-bold">Forest Shop</h1>
+          <div className="badge bg-amber-200 text-amber-900 px-3 py-2 flex items-center gap-1">
+            <CoinsIcon className="h-4 w-4" />
+            <span>{coins ?? "—"} coins</span>
+          </div>
+        </div>
+
+        <div className="card bg-base-100 shadow">
+          <div className="card-body">
+            {items.length === 0 ? (
+              <p className="opacity-70">No items available.</p>
+            ) : (
+              <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                {items.map((it) => {
+                  const afford = typeof coins === "number" ? coins >= it.price : true;
+                  const src = it.icon || `/shop/${it.id}.png`;
+                  return (
+                    <div key={it.id} className="p-4 border border-primary bg-base-100 shadow flex flex-col">
+                      {/* Item icon */}
+                      <div className="w-full h-32 bg-base-200 flex items-center justify-center mb-3">
+                        <img
+                          src={src}
+                          alt={it.name}
+                          className="w-20 h-20 object-contain"
+                          style={{ imageRendering: "pixelated" }}
+                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                        />
+                      </div>
+
+                      <div className="flex-1">
+                        <h3 className="font-semibold">{it.name}</h3>
+                        <p className="text-sm opacity-70 mt-1">{it.desc}</p>
+                      </div>
+
+                      <div className="mt-4 flex items-center justify-between">
+                        <span className="badge bg-amber-200 text-amber-900">
+                          {it.price} coins
+                        </span>
+                        <button
+                          className={`btn btn-primary btn-sm ${!afford ? "btn-disabled" : ""}`}
+                          disabled={!afford || buying === it.id}
+                          onClick={() => buy(it.id)}
+                        >
+                          {buying === it.id ? (
+                            <span className="loading loading-xs" />
+                          ) : (
+                            <>
+                              <ShoppingCartIcon className="h-4 w-4 mr-1" />
+                              Buy
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <p className="text-xs opacity-60 mt-4">
+              Icons are pixel-art PNGs (64×64, transparent). Missing image? Check <code>/public/shop/</code>.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+===== FILE: frontend\src\views\user\SkillForestPage.jsx =====
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import api from "../../lib/axios";
+import toast from "react-hot-toast";
+import { SaveIcon, XIcon, PackageIcon, MousePointerClickIcon } from "lucide-react";
+
+function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
+function toPct(px, total) { return total ? clamp((px / total) * 100, 0, 100) : 0; }
+function uuid() { return (globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)); }
 
 export default function SkillForestPage() {
   const [learning, setLearning] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const [inventory, setInventory] = useState([]);
+  const [catalog, setCatalog] = useState([]);
+
+  // saved decorations per skill (shown on forest)
+  const [decosMap, setDecosMap] = useState({}); // { skillId: Decoration[] }
+
+  // overlay editor state
+  const [overlayFor, setOverlayFor] = useState(null); // entry from learning
+  const [workDecos, setWorkDecos] = useState([]);     // working layout
+  const [overlayInv, setOverlayInv] = useState([]);   // working inventory (qty changes immediately)
+  const [armedItem, setArmedItem] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const canvasRef = useRef(null);
+  const draggingRef = useRef(null); // { id, dx, dy }
+  const movedRef = useRef(false);
+  const suppressNextClickRef = useRef(false);
+
+  // sizing
+  const TREE_BOX = "w-40 h-40";                 // tree sprite box
+  const OVERLAY_ITEM_SIZE = "w-24 h-24";        // 2× bigger (overlay)
+  const FOREST_ITEM_SIZE  = "w-8 h-8";        // 2× bigger (on forest)
+
   useEffect(() => {
-    api
-      .get("/learning")
-      .then((res) => setLearning(res.data))
-      .catch(() => toast.error("Could not load your learning"))
-      .finally(() => setLoading(false));
+    const load = async () => {
+      try {
+        const [learn, me, shop] = await Promise.all([
+          api.get("/learning"),
+          api.get("/users/me"),
+          api.get("/shop/items"),
+        ]);
+        setLearning(learn.data || []);
+        setInventory(me.data?.inventory || []);
+        setCatalog(shop.data || []);
+      } catch {
+        toast.error("Could not load your forest");
+      } finally {
+        setLoading(false);
+      }
+    };
+    load();
   }, []);
+
+  // prefetch saved decorations for 100% trees
+  useEffect(() => {
+    const run = async () => {
+      const reqs = learning.map(async (e) => {
+        const total = e.tasks.length;
+        const done  = e.completedTasks.filter(Boolean).length;
+        const pct   = total ? Math.round((done / total) * 100) : 0;
+        if (pct !== 100) return null;
+        try {
+          const { data } = await api.get(`/learning/${e._id}/decorations`);
+          return { id: e._id, decorations: data?.decorations || [] };
+        } catch { return null; }
+      });
+      const results = await Promise.all(reqs);
+      const map = {};
+      for (const r of results) if (r) map[r.id] = r.decorations;
+      setDecosMap(map);
+    };
+    if (learning.length) run();
+  }, [learning]);
+
+  const iconById = useMemo(() => {
+    const m = new Map();
+    for (const it of catalog) m.set(it.id, it.icon || `/shop/${it.id}.png`);
+    return m;
+  }, [catalog]);
 
   if (loading) {
     return (
       <div className="flex justify-center py-20">
-        <span className="loading loading-spinner loading-lg"></span>
+        <span className="loading loading-spinner loading-lg" />
       </div>
     );
   }
 
-  // map percent -> image
   const stageSrc = (p) => {
-    if (p === 0)   return "/trees/seed.png";
-    if (p < 25)    return "/trees/sprout.png";
-    if (p < 50)    return "/trees/small-plant.png";
-    if (p < 75)    return "/trees/young-tree.png";
-    if (p < 100)   return "/trees/leafy-tree.png";
+    if (p === 0) return "/trees/seed.png";
+    if (p < 25) return "/trees/sprout.png";
+    if (p < 50) return "/trees/small-plant.png";
+    if (p < 75) return "/trees/young-tree.png";
+    if (p < 100) return "/trees/leafy-tree.png";
     return "/trees/full-tree.png";
   };
-
-  // ✅ Removed per-stage sizeClass. 
-  // Now ALL trees will have the same bigger size.
-  const treeSize = "w-40 h-40"; // change this to w-40 h-40 if you want even bigger
-
-  const percent = (entry) => {
-    const total = entry.tasks.length;
-    const done  = entry.completedTasks.filter(Boolean).length;
-    return total ? Math.round((done / total) * 100) : 0;
+  const progressOf = (e) => {
+    const t = e.tasks.length;
+    const d = e.completedTasks.filter(Boolean).length;
+    return t ? Math.round((d / t) * 100) : 0;
   };
 
+  // ---------- Overlay open/close ----------
+  async function openOverlay(entry) {
+    const pct = progressOf(entry);
+    if (pct < 100) {
+      toast.error("Only fully-grown (100%) trees can be decorated.");
+      return;
+    }
+    try {
+      const [{ data: decos }, { data: me }] = await Promise.all([
+        api.get(`/learning/${entry._id}/decorations`),
+        api.get("/users/me"),
+      ]);
+      setOverlayFor(entry);
+      setWorkDecos(decos?.decorations || []);
+      // start with a local, mutable copy of inventory for immediate qty changes
+      setOverlayInv((me?.inventory || []).map((x) => ({ ...x })));
+      setArmedItem(null);
+    } catch {
+      toast.error("Could not load decorator");
+    }
+  }
+  function closeOverlay() {
+    setOverlayFor(null);
+    setWorkDecos([]);
+    setOverlayInv([]);
+    setArmedItem(null);
+  }
+
+  function onTreeContext(ev, entry) {
+    ev.preventDefault();
+    openOverlay(entry);
+  }
+
+  // ---------- Inventory helpers (overlay) ----------
+  function invQty(itemId) {
+    return overlayInv.find(i => i.itemId === itemId)?.qty ?? 0;
+  }
+  function addQty(itemId, n) {
+    setOverlayInv(prev => {
+      const copy = prev.map(i => ({ ...i }));
+      const found = copy.find(i => i.itemId === itemId);
+      if (found) found.qty = Math.max(0, found.qty + n);
+      else copy.push({ itemId, qty: Math.max(0, n), acquiredAt: new Date() });
+      return copy;
+    });
+  }
+
+  // ---------- Place item by clicking canvas ----------
+  function onCanvasClick(e) {
+    if (suppressNextClickRef.current) { // swallow post-drag click
+      suppressNextClickRef.current = false;
+      return;
+    }
+    if (!armedItem) return;
+
+    const leftBtn = e.button === 0 || e.button === undefined;
+    if (!leftBtn) return;
+
+    const box = canvasRef.current?.getBoundingClientRect();
+    if (!box) return;
+
+    const leftQty = invQty(armedItem);
+    if (leftQty <= 0) {
+      toast.error("Out of stock for this item");
+      setArmedItem(null);
+      return;
+    }
+
+    const xPct = toPct(e.clientX - box.left, box.width);
+    const yPct = toPct(e.clientY - box.top,  box.height);
+
+    setWorkDecos(prev => [...prev, { id: uuid(), itemId: armedItem, xPct, yPct }]);
+    addQty(armedItem, -1); // decrement immediately
+
+    // keep armed so user can place multiples; auto-disarm if runs out
+    if (invQty(armedItem) - 1 <= 0) setArmedItem(null);
+  }
+
+  // ---------- Drag to move (no duplicate creation) ----------
+  function onDecoMouseDown(e, deco) {
+    e.stopPropagation(); // don't bubble to canvas -> prevents click add
+    if (e.button === 2 || e.altKey) { // right-click or Alt = remove
+      e.preventDefault();
+      removeDeco(deco.id);
+      return;
+    }
+    const box = canvasRef.current?.getBoundingClientRect();
+    if (!box) return;
+    const xPct = toPct(e.clientX - box.left, box.width);
+    const yPct = toPct(e.clientY - box.top,  box.height);
+    draggingRef.current = { id: deco.id, dx: deco.xPct - xPct, dy: deco.yPct - yPct };
+    movedRef.current = false;
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    e.preventDefault();
+  }
+  function onMouseMove(e) {
+    const drag = draggingRef.current; if (!drag) return;
+    movedRef.current = true;
+    const box = canvasRef.current?.getBoundingClientRect(); if (!box) return;
+    const xPct = toPct(e.clientX - box.left, box.width) + drag.dx;
+    const yPct = toPct(e.clientY - box.top,  box.height) + drag.dy;
+    setWorkDecos(prev => prev.map(d => d.id === drag.id ? ({ ...d, xPct: clamp(xPct,0,100), yPct: clamp(yPct,0,100) }) : d));
+  }
+  function onMouseUp() {
+    if (draggingRef.current && movedRef.current) {
+      // prevent the synthetic click after drag from placing a new item
+      suppressNextClickRef.current = true;
+    }
+    draggingRef.current = null;
+    movedRef.current = false;
+    window.removeEventListener("mousemove", onMouseMove);
+    window.removeEventListener("mouseup", onMouseUp);
+  }
+
+  // ---------- Remove placed decoration (returns qty immediately) ----------
+  function removeDeco(id) {
+    setWorkDecos(prev => {
+      const found = prev.find(d => d.id === id);
+      if (found) addQty(found.itemId, +1);
+      return prev.filter(d => d.id !== id);
+    });
+  }
+
+  // ---------- Save ----------
+  async function saveLayout() {
+    if (!overlayFor) return;
+    setSaving(true);
+    try {
+      const { data } = await api.put(`/learning/${overlayFor._id}/decorations`, { decorations: workDecos });
+      // update top-nav coins qty via /users/me is already handled in your navbar; here we sync inventory & saved layout
+      setInventory(data?.inventory || inventory);
+      setDecosMap(m => ({ ...m, [overlayFor._id]: data?.decorations || [] }));
+      toast.success("Layout saved!");
+      closeOverlay();
+    } catch (e) {
+      toast.error(e?.response?.data?.message || "Could not save layout");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-neutral p-6">
+    <div className="min-h-screen bg-neutral p-6" onMouseUp={onMouseUp}>
       <div className="container mx-auto px-4 space-y-6">
         <div className="flex items-center justify-between">
           <Link to="/dashboard" className="btn btn-ghost text-lg">← Back</Link>
@@ -2993,39 +3735,47 @@ export default function SkillForestPage() {
 
         <div className="card bg-base-100 shadow">
           <div className="card-body">
-            {/* Forest with ground-aligned trees */}
             <div
               className="rounded-xl border border-primary bg-secondary-content/40 p-3 bg-bottom bg-cover"
-              style={{
-                backgroundImage: "url('/forest/forest-bg.png')",
-                imageRendering: "pixelated"
-              }}
+              style={{ backgroundImage: "url('/forest/forest-bg.png')", imageRendering: "pixelated" }}
             >
-              {/* One bottom row; scrolls horizontally if needed */}
               <div className="min-h-[600px] overflow-x-auto">
                 <div className="grid grid-flow-col auto-cols-max items-end gap-0 h-[460px] px-4 ml-6">
                   {learning.length === 0 ? (
-                    <p className="opacity-70 col-span-full py-24">
-                      No trees yet. Start learning from the Skills page.
-                    </p>
+                    <p className="opacity-70 col-span-full py-24">No trees yet. Start learning from the Skills page.</p>
                   ) : (
                     learning.map((e) => {
-                      const pct = percent(e);
-                      const tip = `${e.name} — ${pct}%`;
+                      const pct = progressOf(e);
+                      const canDecorate = pct === 100;
+                      const list = decosMap[e._id] || [];
                       return (
                         <div
                           key={e._id}
-                          className="tooltip tooltip-top -ml-6"
-                          data-tip={tip}
+                          className={`tooltip tooltip-top -ml-6 ${canDecorate ? "cursor-context-menu" : ""}`}
+                          data-tip={`${e.name} — ${pct}%`}
+                          onContextMenu={(ev) => onTreeContext(ev, e)}
                         >
-                          <Link to={`/dashboard/${e._id}`}>
+                          <div className={`relative ${TREE_BOX} mb-[-2px]`}>
                             <img
                               src={stageSrc(pct)}
                               alt={e.name}
-                              className={`transition-transform hover:scale-110 ${treeSize} mb-[-2px]`}
+                              className={`absolute inset-0 ${TREE_BOX} object-contain transition-transform hover:scale-110`}
                               style={{ imageRendering: "pixelated" }}
                             />
-                          </Link>
+                            {canDecorate && list.map(d => {
+                              const src = iconById.get(d.itemId) || `/shop/${d.itemId}.png`;
+                              return (
+                                <img
+                                  key={d.id}
+                                  src={src}
+                                  alt={d.itemId}
+                                  className={`absolute ${FOREST_ITEM_SIZE} -translate-x-1/2 -translate-y-1/2 pointer-events-none`}
+                                  style={{ left: `${d.xPct}%`, top: `${d.yPct}%`, imageRendering: "pixelated" }}
+                                  onError={(ev) => { ev.currentTarget.style.display = 'none'; }}
+                                />
+                              );
+                            })}
+                          </div>
                         </div>
                       );
                     })
@@ -3034,12 +3784,123 @@ export default function SkillForestPage() {
               </div>
             </div>
 
-            <div className="mt-3">
-              Hover a tree to see its skill and progress. Click to open details.
+            <div className="mt-3 text-sm opacity-80 flex items-center gap-2">
+              <MousePointerClickIcon className="h-4 w-4" />
+              Right-click a 100% tree to open the decorator. Click an item to place (consumes 1), drag to move, Alt/right-click to remove.
             </div>
           </div>
         </div>
       </div>
+
+      {/* ===== Overlay editor ===== */}
+      {overlayFor && (
+        <div className="fixed inset-0 z-40 bg-black/40 flex items-center justify-center" onContextMenu={(e) => e.preventDefault()}>
+          <div className="bg-base-100 w-full max-w-5xl rounded-lg shadow-xl border border-primary overflow-hidden">
+            <div className="p-4 border-b flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <PackageIcon className="h-5 w-5 text-primary" />
+                <div className="font-semibold">Decorate: {overlayFor.name}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button className="btn btn-ghost btn-sm" onClick={closeOverlay}>
+                  <XIcon className="h-4 w-4 mr-1" /> Cancel
+                </button>
+                <button className={`btn btn-primary btn-sm ${saving ? "btn-disabled" : ""}`} onClick={saveLayout} disabled={saving}>
+                  {saving ? <span className="loading loading-xs" /> : <><SaveIcon className="h-4 w-4 mr-1" /> Save Layout</>}
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-5">
+              {/* Canvas */}
+              <div className="md:col-span-3 p-4">
+                <div
+                  ref={canvasRef}
+                  className="relative w-full aspect-square bg-base-200 border border-primary flex items-center justify-center"
+                  onClick={onCanvasClick}
+                >
+                  <img
+                    src={"/trees/full-tree.png"}
+                    alt="Tree"
+                    className="max-h-full max-w-full object-contain"
+                    style={{ imageRendering: "pixelated" }}
+                  />
+                  {workDecos.map(d => {
+                    const src = iconById.get(d.itemId) || `/shop/${d.itemId}.png`;
+                    return (
+                      <img
+                        key={d.id}
+                        src={src}
+                        alt={d.itemId}
+                        className={`absolute ${OVERLAY_ITEM_SIZE} -translate-x-1/2 -translate-y-1/2 cursor-move select-none`}
+                        style={{ left: `${d.xPct}%`, top: `${d.yPct}%`, imageRendering: "pixelated" }}
+                        draggable={false}
+                        onMouseDown={(e) => onDecoMouseDown(e, d)}
+                        onError={(ev) => { ev.currentTarget.style.display = 'none'; }}
+                        title="Drag to move · Alt/right-click to remove"
+                      />
+                    );
+                  })}
+                </div>
+                <div className="mt-2 text-xs opacity-70">
+                  Tip: Click the canvas to drop an armed item. Drag items to reposition.
+                </div>
+              </div>
+
+              {/* Inventory */}
+              <div className="md:col-span-2 p-4 border-t md:border-t-0 md:border-l">
+                <h3 className="font-semibold mb-3 flex items-center gap-2">
+                  <PackageIcon className="h-4 w-4 text-primary" /> Inventory
+                </h3>
+
+                {(!overlayInv || overlayInv.length === 0) ? (
+                  <p className="opacity-70">No items yet. Buy some in the <Link to="/shop" className="link link-primary">Shop</Link>.</p>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {overlayInv.map((it, idx) => {
+                      const src = iconById.get(it.itemId) || `/shop/${it.itemId}.png`;
+                      const qtyLeft = invQty(it.itemId);
+                      const isArmed = armedItem === it.itemId;
+                      return (
+                        <button
+                          key={`${it.itemId}-${idx}`}
+                          className={`p-2 border bg-base-100 text-left ${qtyLeft ? "hover:bg-base-200" : "opacity-50"} ${isArmed ? "outline outline-2 outline-primary" : ""}`}
+                          disabled={!qtyLeft}
+                          onClick={() => setArmedItem(isArmed ? null : it.itemId)}
+                          title={qtyLeft ? "Click to arm for placement" : "Out of stock"}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="relative w-14 h-14 bg-base-200 flex items-center justify-center">
+                              <img
+                                src={src}
+                                alt={it.itemId}
+                                className="w-14 h-14 object-contain"
+                                style={{ imageRendering: "pixelated" }}
+                                onError={(ev) => { ev.currentTarget.style.display = 'none'; }}
+                              />
+                              <span className="absolute -right-1 -bottom-1 badge badge-primary badge-sm">x{qtyLeft}</span>
+                            </div>
+                            <div className="flex-1">
+                              <div className="font-medium text-sm">{it.itemId}</div>
+                              <div className="text-xs opacity-70">{isArmed ? "Armed" : "Click to arm"}</div>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {armedItem && (
+                  <div className="mt-3 text-xs opacity-70">
+                    Armed: <span className="font-semibold">{armedItem}</span> — click the tree canvas to place (uses 1).
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

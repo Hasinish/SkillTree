@@ -447,12 +447,20 @@ export async function ensureDB() {
 
 export const app = express();
 
-// If you know your production origin, set CORS_ORIGIN in Vercel env.
-// Otherwise, same-origin `/api` calls from your SPA will work fine.
-app.use(cors({ origin: process.env.CORS_ORIGIN || true, credentials: true }));
+/** CORS: allow one or multiple origins via env CORS_ORIGIN (CSV) */
+function parseOrigins(value) {
+  return String(value || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+const allowed = parseOrigins(process.env.CORS_ORIGIN);
+const corsOrigin = allowed.length ? allowed : true;
+
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json());
 
-// Routes (same as your current server)
+// Routes
 app.use("/api/skills", skillsRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/learning", learningRoutes);
@@ -460,7 +468,10 @@ app.use("/api/users", usersRoutes);
 app.use("/api/streak", streakRoutes);
 app.use("/api/reflections", reflectionsRoutes);
 app.use("/api/shop", shopRoutes);
+
+// Health check
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
+
 
 ===== FILE: backend\src\server.js =====
 // backend/src/server.js
@@ -1753,18 +1764,22 @@ export function clearAuth() {
 import axios from "axios";
 import { getToken, clearAuth } from "./auth";
 
-// Use Vite's built-ins:
-// - import.meta.env.DEV is true in dev, false in prod
-// - Only vars prefixed with VITE_ are exposed to the client at build time
 const isDev = import.meta.env.DEV;
 
-// In dev, keep talking to your local API.
-// In prod, read VITE_API_BASE (set this on your Render Static Site).
-// Fallback to "/api" only helps when frontend+backend are on the SAME origin
-// (e.g., Vercel monorepo). On Render (separate services), you MUST set VITE_API_BASE.
-const API_BASE = isDev
-  ? "http://localhost:5001/api"
-  : (import.meta.env.VITE_API_BASE ?? "/api");
+let API_BASE;
+if (isDev) {
+  // local dev server
+  API_BASE = "http://localhost:5001/api";
+} else {
+  // On Render (separate services) this MUST be set in the Frontend service
+  API_BASE = import.meta.env.VITE_API_BASE;
+  if (!API_BASE) {
+    // Hard fail loudly to avoid silent "/api" fallback when services are split
+    throw new Error(
+      "Missing VITE_API_BASE at build/runtime. Set it to your backend URL, e.g. https://skilltree-backend.onrender.com/api"
+    );
+  }
+}
 
 const api = axios.create({ baseURL: API_BASE });
 
@@ -1779,7 +1794,6 @@ api.interceptors.response.use(
   (error) => {
     const status = error.response?.status;
     const reqUrl = error.config?.url || "";
-
     if (
       status === 401 &&
       !reqUrl.endsWith("/auth/login") &&

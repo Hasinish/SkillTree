@@ -2,3 +2,5 @@
 # never commit secrets
 .env
 *.env
+all_files.txt
+collect_files.py

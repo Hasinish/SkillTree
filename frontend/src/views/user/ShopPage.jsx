@@ -101,9 +101,7 @@ export default function ShopPage() {
                 })}
               </div>
             )}
-            <p className="text-xs opacity-60 mt-4">
-              Icons are pixel-art PNGs (64×64, transparent). Missing image? Check <code>/public/shop/</code>.
-            </p>
+            
           </div>
         </div>
       </div>

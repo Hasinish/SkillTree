@@ -37,3 +37,4 @@ app.use("/api/users", usersRoutes);
 app.use("/api/streak", streakRoutes);
 app.use("/api/reflections", reflectionsRoutes);
 app.use("/api/shop", shopRoutes);
+app.get("/api/health", (_req, res) => res.json({ ok: true }));

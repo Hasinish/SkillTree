@@ -167,13 +167,13 @@
 
 
 ===== FILE: api\index.js =====
-// api/index.js  (serverless function handler)
+// api/index.js
 import { app, ensureDB } from "../backend/src/app.js";
 
 export default async function handler(req, res) {
   try {
     await ensureDB();
-    return app(req, res); // hand off to Express
+    return app(req, res);
   } catch (err) {
     console.error("API error:", err);
     res.statusCode = 500;
@@ -466,7 +466,7 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 // backend/src/server.js
 import { app, ensureDB } from "./app.js";
 
-const PORT = process.env.PORT || 5001;
+const PORT = process.env.PORT || 10000;
 ensureDB().then(() => {
   app.listen(PORT, () => console.log("Server running on port", PORT));
 });
@@ -1753,19 +1753,26 @@ export function clearAuth() {
 import axios from "axios";
 import { getToken, clearAuth } from "./auth";
 
-const BASE_URL =
-  import.meta.env.MODE === "development"
-    ? "http://localhost:5001/api"
-    : "/api";
+// Use Vite's built-ins:
+// - import.meta.env.DEV is true in dev, false in prod
+// - Only vars prefixed with VITE_ are exposed to the client at build time
+const isDev = import.meta.env.DEV;
 
-const api = axios.create({ baseURL: BASE_URL });
+// In dev, keep talking to your local API.
+// In prod, read VITE_API_BASE (set this on your Render Static Site).
+// Fallback to "/api" only helps when frontend+backend are on the SAME origin
+// (e.g., Vercel monorepo). On Render (separate services), you MUST set VITE_API_BASE.
+const API_BASE = isDev
+  ? "http://localhost:5001/api"
+  : (import.meta.env.VITE_API_BASE ?? "/api");
+
+const api = axios.create({ baseURL: API_BASE });
 
 api.interceptors.request.use((config) => {
   const token = getToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
-
 
 api.interceptors.response.use(
   (res) => res,

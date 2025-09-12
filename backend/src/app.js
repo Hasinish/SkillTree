@@ -24,12 +24,20 @@ export async function ensureDB() {
 
 export const app = express();
 
-// If you know your production origin, set CORS_ORIGIN in Vercel env.
-// Otherwise, same-origin `/api` calls from your SPA will work fine.
-app.use(cors({ origin: process.env.CORS_ORIGIN || true, credentials: true }));
+/** CORS: allow one or multiple origins via env CORS_ORIGIN (CSV) */
+function parseOrigins(value) {
+  return String(value || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+const allowed = parseOrigins(process.env.CORS_ORIGIN);
+const corsOrigin = allowed.length ? allowed : true;
+
+app.use(cors({ origin: corsOrigin, credentials: true }));
 app.use(express.json());
 
-// Routes (same as your current server)
+// Routes
 app.use("/api/skills", skillsRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/learning", learningRoutes);
@@ -37,4 +45,6 @@ app.use("/api/users", usersRoutes);
 app.use("/api/streak", streakRoutes);
 app.use("/api/reflections", reflectionsRoutes);
 app.use("/api/shop", shopRoutes);
+
+// Health check
 app.get("/api/health", (_req, res) => res.json({ ok: true }));

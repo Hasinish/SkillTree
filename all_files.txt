@@ -152,9 +152,40 @@
 </html>
 
 
+===== FILE: vercel.json =====
+{
+  "version": 2,
+  "builds": [
+    { "src": "api/index.js", "use": "@vercel/node" },
+    { "src": "frontend/package.json", "use": "@vercel/static-build", "config": { "distDir": "dist" } }
+  ],
+  "routes": [
+    { "src": "^/api/(.*)$", "dest": "/api/index.js" },
+    { "src": "^(?!/api/).*", "dest": "frontend/dist/index.html" }
+  ]
+}
+
+
+===== FILE: api\index.js =====
+// api/index.js  (serverless function handler)
+import { app, ensureDB } from "../backend/src/app.js";
+
+export default async function handler(req, res) {
+  try {
+    await ensureDB();
+    return app(req, res); // hand off to Express
+  } catch (err) {
+    console.error("API error:", err);
+    res.statusCode = 500;
+    res.end("Internal Server Error");
+  }
+}
+
+
 ===== FILE: backend\.env =====
 MONGO_URI=mongodb+srv://hasinishrak2015:Hda8fm5in8TOPAdv@cluster0.gfpd7tx.mongodb.net/skilltree_db?retryWrites=true&w=majority&appName=Cluster0
 PORT=5001
+JWT_SECRET=IlZcdG0MdLdkRdw0mCLoEyqbKl+BWOSpl3a6fpHha8U=
 
 ===== FILE: backend\package.json =====
 {
@@ -373,11 +404,13 @@ export default defineConfig({
 })
 
 
-===== FILE: backend\src\server.js =====
+===== FILE: backend\src\app.js =====
+// backend/src/app.js
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import { connectDB } from "./config/db.js";
+
 import skillsRoutes from "./routes/skillsRoutes.js";
 import authRoutes from "./routes/authRoutes.js";
 import learningRoutes from "./routes/learningRoutes.js";
@@ -387,23 +420,40 @@ import reflectionsRoutes from "./routes/reflectionsRoutes.js";
 import shopRoutes from "./routes/shopRoutes.js";
 
 dotenv.config();
-connectDB();
 
-const app = express();
-app.use(cors());
+let didConnect = false;
+export async function ensureDB() {
+  if (!didConnect) {
+    await connectDB();
+    didConnect = true;
+  }
+}
+
+export const app = express();
+
+// If you know your production origin, set CORS_ORIGIN in Vercel env.
+// Otherwise, same-origin `/api` calls from your SPA will work fine.
+app.use(cors({ origin: process.env.CORS_ORIGIN || true, credentials: true }));
 app.use(express.json());
 
+// Routes (same as your current server)
 app.use("/api/skills", skillsRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/learning", learningRoutes);
 app.use("/api/users", usersRoutes);
 app.use("/api/streak", streakRoutes);
 app.use("/api/reflections", reflectionsRoutes);
-// NEW:
 app.use("/api/shop", shopRoutes);
 
+
+===== FILE: backend\src\server.js =====
+// backend/src/server.js
+import { app, ensureDB } from "./app.js";
+
 const PORT = process.env.PORT || 5001;
-app.listen(PORT, () => console.log("Server running on port", PORT));
+ensureDB().then(() => {
+  app.listen(PORT, () => console.log("Server running on port", PORT));
+});
 
 
 ===== FILE: backend\src\config\coins.js =====

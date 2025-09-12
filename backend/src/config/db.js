@@ -38,8 +38,7 @@ export const connectDB = async () => {
       console.error("   name:", err?.name);
       console.error("   code:", err?.code);
       console.error("   reason:", err?.reason?.message || err?.message);
-      // Common hints:
-      console.error("   HINTS: check Atlas IP allowlist, username/password, and that the DB user has access to the database in your URI.");
+      console.error("   HINTS: check Atlas IP allowlist, username/password, and DB access for the user.");
       if (attempts >= 5) throw err;
       await new Promise(r => setTimeout(r, Math.min(3000 * attempts, 15000)));
     }
